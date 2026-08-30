@@ -69,12 +69,21 @@
     isNormalUser = true;
     extraGroups = [ "wheel" "networkmanager" ];
     openssh.authorizedKeys.keys = [
-      # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-      # REPLACE THIS with your real public key (~/.ssh/id_ed25519.pub).
-      # This is the only edit the repo needs before it will install, and it
-      # is how you get back into the machine. Do not install without it.
-      "ssh-ed25519 AAAAREPLACEMEREPLACEMEREPLACEME ivan@laptop"
-      # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+      # Your existing key, taken from https://github.com/ivanplex.keys
+      #
+      # VERIFY BEFORE INSTALLING that you still hold the private half, on the
+      # machine you intend to SSH from:
+      #
+      #   cat ~/.ssh/id_ed25519.pub
+      #
+      # It must print exactly the line below. If it does not, or the file is
+      # missing, make a new key with `ssh-keygen -t ed25519` and put the new
+      # public line here instead.
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO2OV+Onll7zgHEyV1K2ZLqBr0iASEL6x+jKlXG5TeSr"
+
+      # Worth adding a second key from another machine, or one kept offline.
+      # Two independent ways in costs nothing and has saved many people.
+      # "ssh-ed25519 AAAA... ivan@backup"
     ];
   };
 
