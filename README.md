@@ -1,0 +1,101 @@
+# personal-vpn
+
+Declarative NixOS fleet. Two machines, neither physically reachable once
+deployed.
+
+| Host | Location | Duty | Branch |
+|---|---|---|---|
+| `hkg` | Hong Kong | exit node; later Immich, Prometheus + Grafana, Attic cache | `main` |
+| `sha` | Shanghai | exit node | `stable` |
+| `uk` | — | deferred, no access | — |
+
+Tailnet: `shark-kitefin.ts.net`
+
+## Before you install
+
+1. **Put your SSH public key in `modules/base.nix`.** It is marked with a
+   `REPLACE THIS` block. This is the only edit the repo needs, and it is how
+   you get back into the machine. Do not install without it.
+2. **The machine must be in UEFI mode.** Check `ls /sys/firmware/efi` in the
+   installer. If it fails, disable CSM/Legacy in the BIOS and boot the USB
+   from the entry prefixed `UEFI:`. Gate 3 depends on systemd-boot, which
+   depends on UEFI.
+3. Push this repo to `github.com/ivanplex/personal-vpn`.
+
+## Installing
+
+From the NixOS installer, booted in UEFI mode, as root:
+
+```sh
+nix --experimental-features "nix-command flakes" \
+  run 'github:nix-community/disko/latest#disko-install' -- \
+  --flake 'git+https://TOKEN@github.com/ivanplex/personal-vpn#hkg' \
+  --disk main /dev/nvme0n1 \
+  --write-efi-boot-entries
+```
+
+`TOKEN` is a fine-grained GitHub PAT, this repo only, Contents: Read-only.
+It lives in the installer's RAM and dies with the reboot — revoke it after.
+
+**This destroys the target disk.** `--disk main /dev/nvme0n1` is the internal
+NVMe; `/dev/sda` is your USB stick. Do not mix them up.
+
+Then reboot, pull the USB, and:
+
+```sh
+sudo tailscale up --ssh --advertise-exit-node
+```
+
+Tag the node in the Tailscale admin console and **disable key expiry** for
+that tag. An expired key on the Shanghai box is an unrecoverable outage.
+
+Finally, the gate that matters: **unplug the monitor and keyboard, reboot,
+and SSH in over Tailscale from another machine.** If that does not work you
+are not finished, and nothing later matters.
+
+## Layout
+
+```
+flake.nix                     both hosts, one spine
+hosts/hkg/                    Hong Kong: hardware notes + disk layout
+hosts/sha/                    Shanghai: hardware NOT yet confirmed
+modules/base.nix              bootloader, nix settings, users, sshd, firewall
+modules/tailscale-node.nix    exit node, native (not containerised)
+modules/boot-verdict.nix      GATES 3 AND 4 — read this one properly
+modules/phase3.nix            sops + comin + heartbeat, not yet imported
+.github/workflows/build.yml   GATE 1
+```
+
+## The four gates
+
+A change has to survive all four before it is trusted:
+
+1. **CI build** — a bad expression fails in Actions and never reaches a
+   machine. Free, and catches most mistakes.
+2. **Activation** — a failed `switch-to-configuration` makes comin restore
+   the previous generation. Free, once comin is running.
+3. **Boot** — a new generation is armed as a *one-shot* while the permanent
+   default stays on the last known-good one. A kernel that will not boot
+   falls back with no help from anybody.
+4. **Runtime health** — ten minutes after boot, a timer checks that the
+   machine is genuinely reachable. Healthy: promote the generation to
+   permanent default. Unhealthy: roll back and reboot.
+
+Gates 3 and 4 both live in `modules/boot-verdict.nix`. They are the two that
+matter for a machine you cannot touch, and they are the two you have to
+build yourself.
+
+**Rehearse them before the machines leave your desk.** Push a commit setting
+`services.tailscale.enable = false` and watch the box recover on its own.
+If you have not seen it happen, you do not have the feature.
+
+## Phases
+
+- **1 — install.** No sops, no comin. Just users, sshd, Tailscale, disks.
+- **2 — tailnet.** `tailscale up` by hand, once, while you can still reach it.
+- **3 — hand over to Git.** sops-nix, comin, external heartbeats.
+  See `modules/phase3.nix`.
+- **4 — rehearse the gates.** Then Shanghai ships.
+- **5 — workloads.** Immich, Prometheus, Grafana, the 7 TB disk, Attic.
+
+After phase 3, SSH is for **looking**. Every change goes through this repo.

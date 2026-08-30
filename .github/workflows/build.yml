@@ -1,0 +1,63 @@
+# GATE 1 — nothing reaches a machine unless it builds here first.
+#
+# This is the cheapest of the four safety nets and it catches the large
+# majority of mistakes: typos, removed options, packages that no longer
+# exist, a module that does not evaluate.
+#
+# Turn on branch protection for `main` requiring this check to pass, then
+# point comin at `main`. That combination is what makes gate 1 real rather
+# than advisory.
+
+name: build
+
+on:
+  push:
+    branches: [ main, stable ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ hkg, sha ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Build ${{ matrix.host }}
+        run: |
+          nix build --print-build-logs \
+            ".#nixosConfigurations.${{ matrix.host }}.config.system.build.toplevel"
+
+      # PHASE 5 — push the result to your own cache so the machines never
+      # compile anything. Until this exists they will substitute most things
+      # from cache.nixos.org and build only what you have customised, which
+      # is survivable on 8 GB but slow.
+      #
+      # - name: Push to Attic
+      #   run: |
+      #     nix run github:zhaofengli/attic#attic -- login fleet \
+      #       https://hkg.shark-kitefin.ts.net/attic "$ATTIC_TOKEN"
+      #     nix run github:zhaofengli/attic#attic -- push fleet ./result
+      #   env:
+      #     ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
+
+  # PHASE 2 of the canary story: boot the real configuration in a VM and
+  # assert that it actually comes up. This is the replacement for the UK box
+  # you no longer have, and it catches a genuine slice of the gate 3 and
+  # gate 4 failure classes on a 16 GB runner, before any machine sees them.
+  #
+  # vm-test:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: cachix/install-nix-action@v27
+  #     - run: nix build --print-build-logs '.#checks.x86_64-linux.vm-boot'

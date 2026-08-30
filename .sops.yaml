@@ -1,0 +1,32 @@
+# .sops.yaml — PHASE 3. Template; not usable until the machines exist.
+#
+# Each host decrypts with an age key derived from its own SSH host key, so
+# there is nothing to copy onto a machine and nothing to lose. Get the
+# recipients after installing, with:
+#
+#   nix-shell -p ssh-to-age --run \
+#     'ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub'
+#
+# The offline key below is not optional. If you ever lose both host keys at
+# once — two reinstalls, or a dead disk — it is the only way back into your
+# own secrets. Generate it with `age-keygen`, and keep it somewhere that is
+# not the fleet: a password manager, a printed copy, anywhere but these two
+# machines.
+
+keys:
+  - &offline    age1REPLACE_ME_WITH_YOUR_OFFLINE_KEY
+  - &host_hkg   age1REPLACE_ME_AFTER_INSTALLING_HKG
+  - &host_sha   age1REPLACE_ME_AFTER_INSTALLING_SHA
+
+creation_rules:
+  - path_regex: secrets/hkg\.yaml$
+    key_groups:
+      - age:
+          - *offline
+          - *host_hkg
+
+  - path_regex: secrets/sha\.yaml$
+    key_groups:
+      - age:
+          - *offline
+          - *host_sha
