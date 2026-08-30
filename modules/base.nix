@@ -18,8 +18,11 @@
   # Kernel hang insurance. systemd pings /dev/watchdog; if the kernel stops
   # scheduling, the chipset resets the box. Combined with the boot-verdict
   # module this turns a hard hang into an automatic recovery.
-  systemd.watchdog.runtimeTime = "30s";
-  systemd.watchdog.rebootTime = "10m";
+  # (These moved from systemd.watchdog.* in a recent nixpkgs.)
+  systemd.settings.Manager = {
+    RuntimeWatchdogSec = "30s";
+    RebootWatchdogSec = "10m";
+  };
 
   hardware.cpu.intel.updateMicrocode = true;
   hardware.enableRedistributableFirmware = true;
