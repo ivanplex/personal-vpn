@@ -69,21 +69,19 @@
     isNormalUser = true;
     extraGroups = [ "wheel" "networkmanager" ];
     openssh.authorizedKeys.keys = [
-      # Your existing key, taken from https://github.com/ivanplex.keys
-      #
-      # VERIFY BEFORE INSTALLING that you still hold the private half, on the
-      # machine you intend to SSH from:
-      #
-      #   cat ~/.ssh/id_ed25519.pub
-      #
-      # It must print exactly the line below. If it does not, or the file is
-      # missing, make a new key with `ssh-keygen -t ed25519` and put the new
-      # public line here instead.
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO2OV+Onll7zgHEyV1K2ZLqBr0iASEL6x+jKlXG5TeSr"
+      # Two keys on purpose. They are different keys, held in different
+      # places, so losing one does not lose you the machine. Verify each with
+      # `ssh-keygen -lf <file>` — the fingerprints are noted below.
 
-      # Worth adding a second key from another machine, or one kept offline.
-      # Two independent ways in costs nothing and has saved many people.
-      # "ssh-ed25519 AAAA... ivan@backup"
+      # MacBook Pro — the one you will use day to day.
+      #   SHA256:Y1hmRv6RnqVmAkKht6uHoBGppKRayUGd0Oml7Bc4XkY
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZ/EIDnLKiiq69RUh4bDfXxyWjptpxjRyu9xIKZm5ir ivan@MacBook-Pro-4.local"
+
+      # From https://github.com/ivanplex.keys — wherever that private key
+      # lives, it is a second way in. If you no longer hold it, delete this
+      # line; a key you cannot use is not a backup.
+      #   SHA256:r3FJ4iizkb518dUUXvCKpv8x6WM5zW9i3XflS+xpQYc
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO2OV+Onll7zgHEyV1K2ZLqBr0iASEL6x+jKlXG5TeSr"
     ];
   };
 
