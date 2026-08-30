@@ -1,4 +1,4 @@
-# hosts/sha/disko.nix — declarative partitioning.
+# hosts/shanghai/disko.nix — declarative partitioning.
 #
 # The device below is a placeholder: `disko-install --disk main /dev/nvme0n1`
 # overrides it at install time, which is why the same layout works on both
@@ -11,7 +11,7 @@
 {
   disko.devices.disk.main = {
     type = "disk";
-    device = lib.mkDefault "/dev/nvme0n1"; # confirm on the sha box
+    device = lib.mkDefault "/dev/nvme0n1"; # confirm on the shanghai box
     content = {
       type = "gpt";
       partitions = {

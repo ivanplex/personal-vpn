@@ -23,8 +23,8 @@
 #      keys at once, that offline key is the only way back into your secrets.
 #
 #   3. Create the encrypted files:
-#        nix-shell -p sops --run 'sops secrets/hkg.yaml'
-#        nix-shell -p sops --run 'sops secrets/sha.yaml'
+#        nix-shell -p sops --run 'sops secrets/hong-kong.yaml'
+#        nix-shell -p sops --run 'sops secrets/shanghai.yaml'
 #
 #   4. Uncomment the inputs in flake.nix, the module list entries, and the
 #      body below. Commit. Deploy by hand once. Only then let comin take over.
@@ -47,8 +47,8 @@
   # -------------------------------------------------------------- comin ----
   # Pull-based GitOps. Each machine polls, matches the config to its own
   # hostname, and deploys. Note the branch differs per host: this is the soak
-  # gate — hkg rides `main`, sha rides `stable`, and `stable` only ever
-  # fast-forwards to a commit hkg has been running quietly for 24 hours.
+  # gate — hong-kong rides `main`, shanghai rides `stable`, and `stable`
+  # only fast-forwards to a commit hong-kong has run quietly for 24 hours.
   #
   # services.comin = {
   #   enable = true;
@@ -56,7 +56,7 @@
   #     name = "origin";
   #     url = "git@github.com:ivanplex/personal-vpn.git";
   #     branches.main.name =
-  #       if config.networking.hostName == "hkg" then "main" else "stable";
+  #       if config.networking.hostName == "hong-kong" then "main" else "stable";
   #     auth.access_token_path = config.sops.secrets.deploy-key.path;
   #   }];
   # };
@@ -66,8 +66,8 @@
   # machine you have quietly lost, even though everything looks fine.
 
   # ---------------------------------------------------- external witness ----
-  # Prometheus lives on hkg, so hkg cannot report its own death and with only
-  # two nodes there is no third machine to notice. Both machines ping an
+  # Prometheus lives on hong-kong, so it cannot report its own death, and
+  # with only two nodes there is no third machine to notice. Both ping an
   # outside dead-man's-switch; a missed ping emails you even if the whole
   # fleet is dark. At two nodes this is not optional.
   #

@@ -5,8 +5,8 @@ deployed.
 
 | Host | Location | Duty | Branch |
 |---|---|---|---|
-| `hkg` | Hong Kong | exit node; later Immich, Prometheus + Grafana, Attic cache | `main` |
-| `sha` | Shanghai | exit node | `stable` |
+| `hong-kong` | Hong Kong | exit node; later Immich, Prometheus + Grafana, Attic cache | `main` |
+| `shanghai` | Shanghai | exit node | `stable` |
 | `uk` | — | deferred, no access | — |
 
 Tailnet: `shark-kitefin.ts.net`
@@ -29,7 +29,7 @@ From the NixOS installer, booted in UEFI mode, as root:
 ```sh
 nix --experimental-features "nix-command flakes" \
   run 'github:nix-community/disko/latest#disko-install' -- \
-  --flake 'git+https://TOKEN@github.com/ivanplex/personal-vpn#hkg' \
+  --flake 'git+https://TOKEN@github.com/ivanplex/personal-vpn#hong-kong' \
   --disk main /dev/nvme0n1 \
   --write-efi-boot-entries
 ```
@@ -57,8 +57,8 @@ are not finished, and nothing later matters.
 
 ```
 flake.nix                     both hosts, one spine
-hosts/hkg/                    Hong Kong: hardware notes + disk layout
-hosts/sha/                    Shanghai: hardware NOT yet confirmed
+hosts/hong-kong/              Hong Kong: hardware notes + disk layout
+hosts/shanghai/               Shanghai: hardware NOT yet confirmed
 modules/base.nix              bootloader, nix settings, users, sshd, firewall
 modules/tailscale-node.nix    exit node, native (not containerised)
 modules/boot-verdict.nix      GATES 3 AND 4 — read this one properly

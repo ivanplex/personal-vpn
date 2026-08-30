@@ -42,9 +42,9 @@
 
     substituters = [
       "https://cache.nixos.org"
-      # PHASE 5: your own Attic cache on hkg goes first, and for sha a
-      # domestic mirror goes second:
-      # "https://hkg.shark-kitefin.ts.net/attic/fleet"
+      # PHASE 5: your own Attic cache on hong-kong goes first; shanghai
+      # additionally gets a domestic mirror second:
+      # "https://hong-kong.shark-kitefin.ts.net/attic/fleet"
       # "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
     ];
     trusted-public-keys = [

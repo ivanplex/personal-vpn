@@ -1,4 +1,4 @@
-# hosts/sha — Shanghai.
+# hosts/shanghai — Shanghai.
 #
 # HARDWARE NOT YET CONFIRMED. Run the discovery commands from the runbook on
 # this machine and update the notes below before installing:
@@ -15,7 +15,7 @@
 {
   imports = [ ./disko.nix ];
 
-  networking.hostName = "sha";
+  networking.hostName = "shanghai";
 
   boot.initrd.availableKernelModules = [
     "xhci_pci" "nvme" "ahci" "usb_storage" "sd_mod" "rtsx_pci_sdmmc"
@@ -28,11 +28,11 @@
   # than in base.nix because it is genuinely host-specific.
   #
   # nix.settings.substituters = lib.mkForce [
-  #   "https://hkg.shark-kitefin.ts.net/attic/fleet"
+  #   "https://hong-kong.shark-kitefin.ts.net/attic/fleet"
   #   "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
   #   "https://cache.nixos.org"
   # ];
   #
   # And this host tracks `stable`, not `main` — it is deliberately a day
-  # behind hkg, which is what makes hkg the canary. See phase3.nix.
+  # behind hong-kong, which is what makes hong-kong the canary. See phase3.nix.
 }

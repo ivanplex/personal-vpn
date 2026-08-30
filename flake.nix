@@ -1,5 +1,5 @@
 {
-  description = "personal-vpn — declarative fleet (hkg, sha)";
+  description = "personal-vpn — declarative fleet (hong-kong, shanghai)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -46,14 +46,14 @@
     in
     {
       nixosConfigurations = {
-        hkg = mkHost "hkg";
-        sha = mkHost "sha";
+        hong-kong = mkHost "hong-kong";
+        shanghai  = mkHost "shanghai";
       };
 
       # Convenience: `nix flake check` builds both.
       checks.${system} = {
-        hkg = self.nixosConfigurations.hkg.config.system.build.toplevel;
-        sha = self.nixosConfigurations.sha.config.system.build.toplevel;
+        hong-kong = self.nixosConfigurations.hong-kong.config.system.build.toplevel;
+        shanghai  = self.nixosConfigurations.shanghai.config.system.build.toplevel;
       };
     };
 }

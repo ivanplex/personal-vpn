@@ -1,4 +1,4 @@
-# hosts/hkg — Hong Kong.
+# hosts/hong-kong — Hong Kong.
 #
 # Confirmed hardware, read off the console 2026-08-30:
 #   Intel i3-7100T (Kaby Lake, 2C/4T, 3.4 GHz)
@@ -13,7 +13,7 @@
 {
   imports = [ ./disko.nix ];
 
-  networking.hostName = "hkg";
+  networking.hostName = "hong-kong";
 
   # Kaby Lake hardware video: HD Graphics 630 can do H.264/HEVC transcoding
   # for Immich through VAAPI. Unrelated to the ML features we are skipping.
