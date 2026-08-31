@@ -206,6 +206,28 @@ let
       note "ok   sshd"
     fi
 
+    # DNS. A machine that cannot resolve names cannot be deployed to, yet it
+    # passes every other check here — which is exactly how one goes quiet
+    # without anyone noticing. This happened on 2026-08-31: *.ts.net resolved
+    # perfectly while github.com resolved not at all, for a good while.
+    #
+    # Deliberately lenient: several names, short timeouts, and it only counts
+    # as a failure when ALL of them fail. A rollback cannot fix somebody
+    # else's DNS outage, so this must not be trigger-happy.
+    dns_ok=""
+    for host in github.com cache.nixos.org one.one.one.one; do
+      if [ -n "$(timeout 5 ${pkgs.dnsutils}/bin/dig +short +time=3 +tries=1 \
+                 "$host" A 2>/dev/null)" ]; then
+        dns_ok="$host"; break
+      fi
+    done
+    if [ -z "$dns_ok" ]; then
+      note "FAIL cannot resolve github.com, cache.nixos.org or one.one.one.one"
+      fail=1
+    else
+      note "ok   dns (via $dns_ok)"
+    fi
+
     # PHASE 3 — once comin is deploying, its health matters just as much: a
     # machine whose deploy agent is dead is one you have quietly lost.
     # if ! systemctl is-active --quiet comin; then
@@ -288,8 +310,68 @@ let
 
     ${pkgs.systemd}/bin/systemctl reboot
   '';
+
+  # ---- fleet-status: one command, the whole truth ---------------------------
+  # Three different sources claim to know which generation boots next, and
+  # they disagree. `bootctl list` marks (default) from loader.conf, which is
+  # the LOWEST priority of the three. The real precedence is:
+  #     one-shot  ->  EFI LoaderEntryDefault  ->  loader.conf
+  # An hour was lost to reading the wrong one. This prints all of them.
+  fleetStatus = pkgs.writeShellScriptBin "fleet-status" ''
+    set -uo pipefail
+    ${genHelpers}
+
+    efivar() {
+      local f
+      for f in /sys/firmware/efi/efivars/"$1"-*; do
+        [ -e "$f" ] || continue
+        tail -c +5 "$f" 2>/dev/null | tr -d '\0'
+        return 0
+      done
+      return 1
+    }
+
+    booted=$(booted_generation) || booted="?"
+    latest=$(latest_generation) || latest="?"
+    promoted=$(cat ${promotedFile} 2>/dev/null || echo "never")
+    default=$(efivar LoaderEntryDefault || echo "(unset — loader.conf decides)")
+    oneshot=$(efivar LoaderEntryOneShot || echo "(none)")
+
+    echo
+    echo "  $(hostname)"
+    echo
+    echo "  generations"
+    echo "    booted        $booted"
+    if [ "$latest" != "$booted" ]; then
+      echo "    latest        $latest   <- installed but NOT running"
+    else
+      echo "    latest        $latest"
+    fi
+    echo "    promoted      $promoted"
+    echo
+    echo "  bootloader   (one-shot beats default beats loader.conf)"
+    echo "    one-shot      $oneshot"
+    echo "    default       $default"
+    echo
+    echo "  health"
+    printf '    tailscale     %s\n' \
+      "$(${pkgs.tailscale}/bin/tailscale status --json 2>/dev/null \
+         | ${pkgs.jq}/bin/jq -r '.BackendState' 2>/dev/null || echo unknown)"
+    printf '    sshd          %s\n' "$(systemctl is-active sshd 2>&1)"
+    printf '    dns           %s\n' \
+      "$(timeout 5 ${pkgs.dnsutils}/bin/dig +short +time=3 +tries=1 github.com A \
+         2>/dev/null | head -1 || true)"
+    printf '    failed units  %s\n' \
+      "$(systemctl list-units --state=failed --no-legend --plain | wc -l)"
+    echo
+    systemctl list-timers boot-verdict.timer --no-legend --no-pager 2>/dev/null \
+      | while read -r line; do echo "  next check    $line"; done
+    echo
+  '';
 in
 {
+  environment.systemPackages = [ fleetStatus ];
+
   # Runs when the bootloader is written — i.e. on a switch, and not at boot.
   boot.loader.systemd-boot.extraInstallCommands = ''
     ${armScript}

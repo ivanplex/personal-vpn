@@ -112,6 +112,23 @@
   networking.networkmanager.enable = false;
   networking.useDHCP = lib.mkDefault true;
 
+  # ------------------------------------------------------------------ dns ---
+  # 2026-08-31: this machine spent a while resolving *.ts.net perfectly while
+  # failing to resolve github.com at all, and reported itself healthy the
+  # whole time. tailscaled had started before the network was up ("connect:
+  # network is unreachable"), captured no upstream resolvers, and owned
+  # /etc/resolv.conf through openresolv. comin would simply have stopped
+  # deploying, silently.
+  #
+  # systemd-resolved fixes the structure: Tailscale detects it and uses split
+  # DNS over D-Bus — only *.ts.net goes to MagicDNS at 100.100.100.100, and
+  # everything else goes to resolved, which holds DHCP-supplied servers AND a
+  # hardcoded fallback that survives any startup race.
+  services.resolved = {
+    enable = true;
+    fallbackDns = [ "1.1.1.1" "9.9.9.9" ];
+  };
+
   # ------------------------------------------------------------- basics -----
   time.timeZone = "Asia/Hong_Kong";
   i18n.defaultLocale = "en_GB.UTF-8";

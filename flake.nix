@@ -7,16 +7,18 @@
     disko.url = "github:nix-community/disko";
     disko.inputs.nixpkgs.follows = "nixpkgs";
 
-    # ---- PHASE 3 ----------------------------------------------------------
-    # Uncomment these together with the matching imports in modules/phase3.nix
-    # and the module list below. Not before: sops needs a host key that does
-    # not exist until the machine has been installed once.
+    # GitOps agent. Neither the package nor the module is in nixpkgs 26.05,
+    # so it has to come from its own flake.
+    comin.url = "github:nlewo/comin";
+    comin.inputs.nixpkgs.follows = "nixpkgs";
+
+    # ---- PHASE 3b ---------------------------------------------------------
+    # Uncomment with the matching imports in modules/phase3.nix. Not before:
+    # sops needs a host key that does not exist until a machine has been
+    # installed once.
     #
     # sops-nix.url = "github:Mic92/sops-nix";
     # sops-nix.inputs.nixpkgs.follows = "nixpkgs";
-    #
-    # comin.url = "github:nlewo/comin";
-    # comin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = { self, nixpkgs, disko, ... }@inputs:
@@ -35,9 +37,11 @@
           ./modules/tailscale-node.nix
           ./modules/boot-verdict.nix      # gates 3 and 4
 
-          # ---- PHASE 3 ----
+          inputs.comin.nixosModules.comin
+          ./modules/comin.nix
+
+          # ---- PHASE 3b ----
           # inputs.sops-nix.nixosModules.sops
-          # inputs.comin.nixosModules.comin
           # ./modules/phase3.nix
 
           (./hosts + "/${name}")

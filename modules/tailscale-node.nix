@@ -36,6 +36,15 @@
   # traffic on some kernels.
   networking.firewall.checkReversePath = "loose";
 
-  # Do not let a Tailscale hiccup delay boot.
-  systemd.services.tailscaled.serviceConfig.TimeoutStartSec = "30s";
+  systemd.services.tailscaled = {
+    # Wait for an actual network before starting. Without this, tailscaled came
+    # up six seconds into boot, logged "connect: network is unreachable" against
+    # every bootstrap server, and configured DNS having captured no upstream
+    # resolvers — leaving the machine able to resolve *.ts.net and nothing else.
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+
+    # Do not let a Tailscale hiccup delay boot indefinitely.
+    serviceConfig.TimeoutStartSec = "30s";
+  };
 }
