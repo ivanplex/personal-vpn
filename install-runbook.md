@@ -143,6 +143,10 @@ expiry, which removes the failure where a remote box silently drops off the
 tailnet months later. Then **approve it as an exit node** in the machine's
 route settings; "offers exit node" only means advertised.
 
+The tags are declared in `tailscale/acl.hujson` (`tagOwners`). A node that
+carries a tag listed under `autoApprovers.exitNode` there is approved as an
+exit node automatically, with no visit to the route settings.
+
 > **Gate:** unplug monitor and keyboard, reboot, and SSH in over Tailscale
 > from another machine. If that fails you are not finished, and nothing
 > later matters.
