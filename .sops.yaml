@@ -15,18 +15,18 @@
 
 keys:
   - &offline    age1REPLACE_ME_WITH_YOUR_OFFLINE_KEY
-  - &host_hkg   age1REPLACE_ME_AFTER_INSTALLING_HKG
-  - &host_sha   age1REPLACE_ME_AFTER_INSTALLING_SHA
+  - &host_hk    age1REPLACE_ME_AFTER_INSTALLING_HONG_KONG
+  - &host_sh    age1REPLACE_ME_AFTER_INSTALLING_SHANGHAI
 
 creation_rules:
-  - path_regex: secrets/hkg\.yaml$
+  - path_regex: secrets/hong-kong\.yaml$
     key_groups:
       - age:
           - *offline
-          - *host_hkg
+          - *host_hk
 
-  - path_regex: secrets/sha\.yaml$
+  - path_regex: secrets/shanghai\.yaml$
     key_groups:
       - age:
           - *offline
-          - *host_sha
+          - *host_sh

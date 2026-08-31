@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: [ hkg, sha ]
+        host: [ hong-kong, shanghai ]
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,7 @@ jobs:
       # - name: Push to Attic
       #   run: |
       #     nix run github:zhaofengli/attic#attic -- login fleet \
-      #       https://hkg.shark-kitefin.ts.net/attic "$ATTIC_TOKEN"
+      #       https://hong-kong.shark-kitefin.ts.net/attic "$ATTIC_TOKEN"
       #     nix run github:zhaofengli/attic#attic -- push fleet ./result
       #   env:
       #     ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
