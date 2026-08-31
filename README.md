@@ -48,6 +48,8 @@ sudo tailscale up --ssh --advertise-exit-node
 
 Tag the node in the Tailscale admin console and **disable key expiry** for
 that tag. An expired key on the Shanghai box is an unrecoverable outage.
+The tags themselves are declared in `tailscale/acl.hujson` (`tagOwners`) —
+see [Tailnet policy](#tailnet-policy) below.
 
 Finally, the gate that matters: **unplug the monitor and keyboard, reboot,
 and SSH in over Tailscale from another machine.** If that does not work you
@@ -64,7 +66,28 @@ modules/tailscale-node.nix    exit node, native (not containerised)
 modules/boot-verdict.nix      GATES 3 AND 4 — read this one properly
 modules/phase3.nix            sops + comin + heartbeat, not yet imported
 .github/workflows/build.yml   GATE 1
+tailscale/                    tailnet policy — ACL, tags, autoApprovers (Terraform)
 ```
+
+## Tailnet policy
+
+The tailnet side of the picture — who may talk to whom, which tags exist,
+which tags are auto-approved as exit nodes, the SSH rule, the Anthropic app
+connector — is `tailscale/acl.hujson`, applied as a single `tailscale_acl`
+resource by Terraform. `modules/tailscale-node.nix` is what a *node* does;
+`tailscale/` is what the *tailnet* allows.
+
+```sh
+cd tailscale
+terraform plan      # diff against the live policy
+terraform apply
+```
+
+Credentials are a Tailscale OAuth client in `tailscale/terraform.tfvars`,
+which is gitignored — copy `terraform.tfvars.example` and fill it in. State
+is local (`terraform.tfstate`, also ignored); if it is ever lost,
+`terraform import tailscale_acl.main_policy acl` recovers it. Encrypting the
+tfvars with sops is Phase 3 work, alongside the node secrets.
 
 ## The four gates
 

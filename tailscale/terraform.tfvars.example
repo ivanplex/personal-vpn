@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and fill in. The OAuth client lives in
+# the Tailscale admin console under Settings -> OAuth clients; it needs the
+# `policy_file` write scope and nothing else.
+TAILSCALE_OAUTH_CLIENT_ID     = "REPLACE_ME"
+TAILSCALE_OAUTH_CLIENT_SECRET = "tskey-client-REPLACE_ME"
+TAILSCALE_TAILNET             = "shark-kitefin.ts.net"

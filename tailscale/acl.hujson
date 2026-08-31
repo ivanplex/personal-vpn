@@ -1,0 +1,114 @@
+// Tailscale policy file (HuJSON: JSON + // comments).
+// Applied by Terraform via tailscale_acl.main_policy in main.tf.
+{
+  // Who is allowed to apply each tag when authenticating a node.
+  "tagOwners": {
+    // Generic tag for containerized/headless nodes.
+    "tag:container": ["autogroup:admin"],
+    // Always-on exit node.
+    "tag:permanent-exit-node": ["autogroup:admin"],
+    // Router used for Claude traffic.
+    "tag:claude-router": ["autogroup:admin"],
+    // Taiwan app connector — advertises routes for Anthropic domains only.
+    "tag:tw-limited-trust": ["autogroup:admin"]
+  },
+
+  // Access rules. Currently wide open within the tailnet.
+  "acls": [
+    {
+      "action": "accept",
+      "src": [
+        "autogroup:member",
+        "tag:container",
+        "tag:claude-router",
+        "tag:permanent-exit-node"
+      ],
+      "dst": [
+        "*:*", // any tailnet node, any port
+        "autogroup:internet:*" // exit-node traffic
+      ]
+    }
+  ],
+
+  // Tailscale SSH: members may SSH to their own devices, subject to a
+  // periodic re-auth check.
+  "ssh": [
+    {
+      "action": "check",
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self"],
+      "users": ["autogroup:nonroot", "root"]
+    }
+  ],
+
+  "nodeAttrs": [
+    {
+      "target": ["*"],
+      "app": {
+        // App connector: route Claude/Anthropic domains through the
+        // tag:tw-limited-trust node (Taiwan egress) instead of the
+        // default route. The connector resolves these domains and
+        // advertises the resulting IPs as routes.
+        "tailscale.com/app-connectors": [
+          {
+            "name": "claude-ai",
+            "connectors": ["tag:tw-limited-trust"],
+            "domains": [
+              "claude.ai",
+              "*.claude.ai",
+              "claude.com",
+              "*.claude.com",
+              "anthropic.com",
+              "*.anthropic.com"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Allow members to expose services publicly via Tailscale Funnel.
+      "target": ["autogroup:member"],
+      "attr": ["funnel"]
+    },
+    {
+      // Mullvad exit-node access for this specific device.
+      "target": ["100.85.174.62"],
+      "attr": ["mullvad"]
+    }
+  ],
+
+  "autoApprovers": {
+    // Auto-approve the Anthropic ranges advertised by the app connector,
+    // so a re-resolve doesn't require manual approval in the admin console.
+    "routes": {
+      "160.79.104.0/21": ["tag:tw-limited-trust"],
+      "2607:6bc0::/32": ["tag:tw-limited-trust"]
+    },
+    // These tags may advertise themselves as exit nodes without approval.
+    "exitNode": [
+      "tag:claude-router",
+      "tag:permanent-exit-node",
+      "tag:tw-limited-trust"
+    ]
+  },
+  "grants": [
+    {
+      // Allow admins to access any device with the tag "tag:container"
+      "src": ["autogroup:admin"],
+      "dst": ["tag:container"],
+
+      "app": {
+        "tailscale.com/cap/tsidp": [
+          {
+            // allow access to UI
+            "allow_admin_ui": true,
+
+            // Security Token Service (STS) controls
+            "users":     ["*"],
+            "resources": ["*"],
+          },
+        ],
+      },
+    },
+  ],
+}
