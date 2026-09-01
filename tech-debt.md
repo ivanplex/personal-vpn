@@ -202,32 +202,213 @@ is imported by `hosts/hong-kong/default.nix` today.
       **on hong-kong** (no nix on the MacBook) and committed — sops-nix pinned
       at `a8627b2`.
 - [x] Tailscale auth key created and encrypted into `tsidp-env`.
-      **Unverified from here:** that it is reusable, non-ephemeral,
-      pre-approved and tagged `tag:container`. Tagged matters — tagged devices
-      do not expire, and a node key lapsing in 180 days on an unreachable box
-      is a time bomb. Confirm on the node once it registers.
-- [ ] Confirm the `idp` node registers, carries the tag, and shows expiry
-      disabled.
-- [ ] Confirm HTTPS certificates and MagicDNS are enabled on the tailnet.
-      Both tsidp and `tailscale serve` need them.
+      **Reusable and pre-approved: PROVEN 2026-09-01** — the state dir was
+      moved aside and tsidp re-registered with no human interaction
+      (`AuthLoop: state is Running; done`, 5s). A single-use or
+      approval-required key could not have done that.
+      **Tagged `tag:container`: PROVEN** — `tailscale status --json` reports
+      `Tags=["tag:container"]`, `KeyExpiry` absent. Tagged matters: tagged
+      devices do not expire, and a node key lapsing in 180 days on an
+      unreachable box is a time bomb.
+- [ ] **Non-ephemeral: still open, and being tested for free right now.** The
+      stale `idp-1` node is offline. An *ephemeral* node is deleted by the
+      coordination server shortly after it goes offline. If `idp-1` is still
+      listed an hour after 12:07 on 2026-09-01, the key is non-ephemeral and
+      this box can be reinstalled without the issuer URL moving. Delete it by
+      hand afterwards — see the cleanup items below.
+- [x] The `idp` node registers, carries the tag, and shows expiry disabled.
+- [x] HTTPS certificates and MagicDNS are enabled on the tailnet — proven by
+      `https://idp.shark-kitefin.ts.net/.well-known/openid-configuration`
+      returning `"issuer": "https://idp.shark-kitefin.ts.net"` over a valid
+      certificate.
 
-### Stage 3 — the OIDC client
+#### THE NAME COLLISION LANDMINE — read before any tsidp state wipe
 
-- [ ] Create the Immich client in tsidp's admin UI at
-      `https://idp.shark-kitefin.ts.net` with redirect URIs `/auth/login`,
-      `/user-settings`, `/api/oauth/mobile-redirect` under
-      `https://hong-kong.shark-kitefin.ts.net`.
-- [ ] Secret → `immich-oauth-client-secret` in `secrets/hong-kong.yaml`.
-      It is shown **once**.
-- [ ] Client ID → `hosts/hong-kong/immich.nix` (`REPLACE-ME-WITH-THE-TSIDP-CLIENT-ID`).
+tsidp derives its OIDC **issuer** from the tsnet node's MagicDNS name, resolved
+at startup, and logs it as `server_url=`. That name is assigned by the
+coordination server **at registration**, and Tailscale does not reclaim a freed
+name for an already-registered node.
 
-### Stage 4 — Immich
+So if a node called `idp` already exists when tsidp registers, the new node
+silently becomes `idp-1` and the issuer silently becomes
+`https://idp-1.shark-kitefin.ts.net`. That is exactly what happened on
+2026-09-01: an older container held the name. Nothing errors. `systemctl status
+tsidp` is green. You find out from one line in the journal, or not at all.
 
-- [ ] Deploy, complete first sign-up (Immich makes the first user admin).
+**Today this cost nothing, because no OIDC client existed yet.** After stage 3
+it is expensive: `immich.nix` pins `issuerUrl`, and a mismatched issuer fails
+OIDC discovery with an error that points at Immich rather than at the name.
+
+The rule, therefore — **before wiping `/var/lib/private/tsidp` or reinstalling
+this box, delete the old `idp` node from the admin console first**, and after
+restarting confirm the issuer:
+
+    journalctl -u tsidp | grep server_url
+    # must read https://idp.shark-kitefin.ts.net — no -1, -2 suffix
+
+There is no way to assert this from Nix: `settings.hostName` is only a
+*request*, and the coordination server is free to answer with a suffix.
+
+#### Cleanup left from the 2026-09-01 rename
+
+- [ ] Delete the stale `idp-1` node (`100.81.145.40`) in the admin console —
+      after it has served as the ephemerality test above.
+- [ ] `sudo rm -rf /var/lib/private/tsidp.bak-idp-1` on hong-kong. It is the
+      superseded state dir, kept only so the rename was reversible. It holds a
+      dead node key and the old `idp-1` certificate; inert, but it is secret
+      material with no remaining purpose.
+
+### Stage 3 — the OIDC client — DONE 2026-09-01
+
+- [x] Immich client created at `https://idp.shark-kitefin.ts.net`, client ID
+      `127eb5a31f4804aee40b282d618052cd`, all three redirect URIs registered
+      and read back from `GET /clients/`.
+      **No browser needed.** tsidp's admin UI is server-rendered: `GET /new`
+      is a plain form and `POST /new` with `name` + newline-separated
+      `redirect_uris` creates the client, while `GET /clients/` returns JSON.
+      Authorisation is by tailnet identity (WhoIs on the connection), so any
+      admin device on the tailnet can drive it with `curl`. Worth knowing —
+      it makes the IdP scriptable, and it means anything that can reach the
+      node *as an admin* can create clients.
+- [x] Secret → `immich-oauth-client-secret` in `secrets/hong-kong.yaml`, via
+      `sops set … --value-stdin` so it never appeared in a process argument
+      list. Round-trip verified against the value tsidp returned, and **both
+      recipients confirmed still on the file** after re-encryption — that was
+      the near-miss of earlier today, so it is checked every time now.
+- [x] Client ID → `hosts/hong-kong/immich.nix`.
+
+### 🟠 Rotate the tsidp auth key
+
+- [ ] **`TS_AUTH_KEY` in `secrets/hong-kong.yaml` was printed in cleartext to
+      a terminal on 2026-09-01** while masking the decrypted sops output; the
+      mask pattern did not account for the value being a YAML block scalar.
+      It did not leave the machine or reach the repo, but it is in a
+      transcript and in scrollback.
+      That key is reusable, non-expiring, pre-approved and tagged
+      `tag:container` — and `tag:container` has `dst: ["*:*"]` in
+      `tailscale/acl.hujson`, so it is effectively a permanent join-anything
+      credential for the tailnet. Revoke it in the admin console, issue a
+      replacement with the same four properties, and `sops set` it in.
+      **TWO entries now hold this same key** and both must be updated:
+      `tsidp-env` (env-file format, `TS_AUTH_KEY=…`) and `tailscale-authkey`
+      (raw, for the immich node). Deliberately one key with two encodings —
+      one credential to rotate, not two.
+      **Cost of rotating is near zero**: `TS_AUTH_KEY` is only read when the
+      tsnet state directory is empty, so the running `idp` node is unaffected
+      and does not re-register.
+
+### Stage 4 — Immich — DEPLOYED 2026-09-01, running under `test`
+
+Activated with `nixos-rebuild test --flake /tmp/pv#hong-kong` from a copy of
+the working tree — the runbook's "no commit at all" path. **Not on any branch
+and not in the bootloader**, so a reboot reverts it. See the persistence note
+below.
+
+- [x] Deploys and activates. `sops-install-secrets` decrypted
+      `immich-oauth-client-secret` with the host key; `immich-media-setup`,
+      `immich-server`, `postgresql`, `redis-immich` and `system-immich.slice`
+      all started clean, and `boot-verdict` reported **0 failed units**
+      immediately afterwards.
+- [x] **The library is on the array, not the root disk.** `/mnt/storage` is
+      device 2049, `/` is 66307 — different devices, which is the check the
+      whole file exists to guarantee. Root went 5.7 G → 7.3 G (Postgres and
+      store paths only), 207 G free.
+- [x] All six mount markers seeded and verified by Immich itself:
+      `"mountChecks":{"thumbs":true,"upload":true,"backups":true,
+      "library":true,"profile":true,"encoded-video":true}`.
+- [x] Memory caps live on the slice: `MemoryHigh=2G`, `MemoryMax=3G`,
+      `MemorySwapMax=2G`, `CPUWeight=20`, `IOWeight=20`, with `immich-server`
+      inside it at `OOMScoreAdjust=500`. Sitting at 1.36 G with 5.3 G
+      available.
+- [x] Front door works: `https://hong-kong.shark-kitefin.ts.net` returns 200,
+      and `/api/server/features` reports `oauth: true`,
+      `oauthAutoLaunch: false`, `passwordLogin: true` — the break-glass path
+      is intact.
+- [ ] **First sign-up — do this promptly.** Immich makes the FIRST user the
+      admin, whichever way they sign in, and the tailnet's `acls` rule is
+      wide open with `autoRegister = true`. Until you claim it, any member of
+      the tailnet who reaches the page becomes the administrator.
+      The URL is now `https://immich.shark-kitefin.ts.net`.
 - [ ] Upload a photo and a video; confirm files land under
       `/mnt/storage/immich` and the log shows VAAPI, not software transcoding.
 - [ ] Confirm OIDC login works, **and** that password login still works.
-- [ ] Confirm the nightly `pg_dump` lands in `/mnt/storage/immich/backups`.
+- [ ] Confirm the nightly `pg_dump` lands in `/mnt/storage/immich/backups`
+      (cron `30 03 * * *`, keeps 14).
+
+#### Immich moved to its own tailnet node — 2026-09-01
+
+`https://immich.shark-kitefin.ts.net`, not `hong-kong.…` any more.
+
+A name in the ts.net zone belongs to a node: MagicDNS has no CNAMEs and no
+aliases, and `tailscale serve` always publishes on the serving node's own
+name. `hong-kong` cannot be renamed — it is the machine, it is an exit node,
+and its name is how you SSH to it. So a distinct name meant a distinct node.
+
+`hosts/hong-kong/frontdoor.nix` runs a **second tailscaled** for it, using the
+same nixpkgs `tailscale` package already on the box — no new flake input, and
+notably no `tsnsrv`, which is not in nixpkgs. It is fenced off from the real
+daemon by construction, and every one of these matters:
+
+| flag | why |
+|---|---|
+| `--tun=userspace-networking` | no TUN, no `NET_ADMIN`, no routes; cannot touch the exit node |
+| `--accept-dns=false` | **the important one.** tailscaled manages `/etc/resolv.conf`; 2026-08-31 was one daemon getting DNS wrong, and two would be worse |
+| `--accept-routes=false` | subnet routes are the first daemon's business |
+| `--port=0` | ephemeral WireGuard port; the default 41641 is taken |
+| `--statedir` / `--socket` | own state under `/var/lib/tailscale-immich`, own LocalAPI socket; no path to the real daemon's state |
+
+`OOMScoreAdjust` is +300 here against −900 on the real tailscaled, so under
+memory pressure the kernel reaches for this one first by a wide margin.
+Verified after deploy: real tailscaled still active, still advertising the
+exit node, `/etc/resolv.conf` untouched.
+
+- [x] Node registered as `immich` — **not `immich-1`**, checked first, per
+      this morning's lesson. Tagged `tag:container`, valid Let's Encrypt cert
+      (`CN = immich.shark-kitefin.ts.net`), and `/api/server/features` served
+      over it.
+- [x] tsidp client redirect URIs updated **in place** via
+      `POST /edit/<client_id>`, so the client ID and secret did not change —
+      no re-encryption of `immich-oauth-client-secret` needed.
+- [x] `immich.nix`: `server.externalDomain` and `oauth.mobileRedirectUri`
+      moved to the new host. These must match the name the browser actually
+      used or OAuth bounces to the wrong origin.
+
+**FOOTGUN, hit during this change:** removing the old `tailscale-serve-immich`
+unit does **not** stop the old front door. `tailscale serve` config is
+persisted by tailscaled itself, not by the unit — and both this file and
+`frontdoor.nix` deliberately have no `ExecStop`, so a deploy never briefly
+drops the door. Retiring a front door therefore needs one manual command:
+
+    sudo tailscale serve --https=443 off
+
+Done for `hong-kong`; confirmed `No serve config` there and the immich node
+still serving. If a future front door moves again, remember this step or the
+old URL keeps working and you will not notice.
+
+#### Persistence: what a reboot costs right now
+
+Verified on the box: `/run/booted-system` is `comin-1`, `/run/current-system`
+is the test activation (in no profile at all), and `/boot/loader/loader.conf`
+says `default nixos-comin-generation-2.conf`. So **a reboot today boots
+comin-2, which is `main` — stage 1, the mount and nothing else.**
+
+What that costs is a redeploy, not work. Everything durable survives: the git
+tree, `secrets/hong-kong.yaml`, the registered `idp` node and its OIDC client
+in `/var/lib/tsidp`, the Immich library on the array, and the Postgres cluster
+on the SSD. The `tailscale serve` mapping also survives, because tailscaled
+persists it — it will just 502 until Immich is back.
+
+**Tonight's unplug drill will therefore wipe this activation. That is fine and
+expected** — do the drill against stage 1 as planned, so it tests `nofail`
+with one variable and not three.
+
+- [ ] **Merging to `main` is the step that needs care, not this one.** That
+      makes Immich the boot generation, and with gate 4 inert and
+      `LoaderEntryDefault` unset there is no automatic fallback if it fails to
+      BOOT. The standing rule applies: the first boot of a materially new
+      generation happens with a console in reach. Tonight's drill is that
+      window — do the drill first, then merge, then reboot once while you can
+      still see the screen.
 
 ---
 

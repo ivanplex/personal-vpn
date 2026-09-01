@@ -1,12 +1,13 @@
 # hosts/hong-kong/identity.nix — who you are, and how you reach Immich at all.
 #
-# Two things live here, and they are separate on purpose:
+# Just tsidp now: an OIDC identity provider for the tailnet, on its own tsnet
+# node at idp.shark-kitefin.ts.net.
 #
-#   tsidp                    an OIDC identity provider for the tailnet, on its
-#                            own tsnet node at idp.shark-kitefin.ts.net
-#   tailscale-serve-immich   the front door, publishing Immich on this node's
-#                            own name over HTTPS, with no reverse proxy and no
-#                            open port. architecture.md:217 already chose this.
+# The front door used to live here too, as a `tailscale serve` on THIS node's
+# name. It moved to ./frontdoor.nix on 2026-09-01, when Immich was given its
+# own tailnet node so it could answer to immich.shark-kitefin.ts.net rather
+# than hong-kong.shark-kitefin.ts.net. That file's header explains why a name
+# means a node, and how a second tailscaled is kept away from the real one.
 #
 # ---------------------------------------------------------------------------
 # WHY tsidp GETS ITS OWN TSNET NODE
@@ -56,38 +57,6 @@
 
 { config, lib, pkgs, ... }:
 
-let
-  tailscaleBin = "${config.services.tailscale.package}/bin/tailscale";
-  # Reads Immich's port even when ./immich.nix is not imported yet, in which
-  # case this is the option default (2283) — the same value. Serving to a port
-  # nothing is listening on is a 502, not a failure.
-  serveTarget = "http://127.0.0.1:${toString config.services.immich.port}";
-
-  # Explicit PATH, no awk/sed/basename/sort. Operating rule 8.
-  serveScript = pkgs.writeShellScript "tailscale-serve-immich" ''
-    set -uo pipefail
-    export PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.systemd ]}
-
-    # `tailscale serve` is a no-op before the backend is up. Bounded wait: if
-    # it runs out, Restart=on-failure has another go in a minute rather than
-    # holding a start job open forever.
-    i=0
-    while [ "$i" -lt 30 ]; do
-      if ${tailscaleBin} status --json 2>/dev/null \
-         | ${pkgs.jq}/bin/jq -e '.BackendState == "Running"' >/dev/null; then
-        break
-      fi
-      sleep 2
-      i=$((i + 1))
-    done
-
-    # Idempotent by construction: --bg writes the whole ServeConfig through
-    # SetServeConfig, which is a set and not a diff, and tailscaled persists it
-    # across reboots on its own. This unit exists so that a REINSTALL gets the
-    # front door back without anyone having to remember to type it.
-    exec ${tailscaleBin} serve --bg --yes --https=443 ${serveTarget}
-  '';
-in
 {
   # Declared here rather than in ./secrets.nix so that importing this file is
   # all it takes to bring the secret with it.
@@ -102,7 +71,16 @@ in
     environmentFile = config.sops.secrets.tsidp-env.path;
 
     settings = {
-      hostName = "idp";           # -> idp.shark-kitefin.ts.net
+      # -> idp.shark-kitefin.ts.net, and therefore the OIDC ISSUER, which
+      # immich.nix pins. But this is a REQUEST, not an assertion: if a node
+      # named `idp` already exists, the coordination server answers `idp-1`
+      # and the issuer silently moves with it. Happened on 2026-09-01; cost
+      # nothing then only because no OIDC client existed yet. So before ever
+      # wiping /var/lib/private/tsidp or reinstalling this box, delete the old
+      # node in the admin console first, then check:
+      #     journalctl -u tsidp | grep server_url
+      # Full write-up under "THE NAME COLLISION LANDMINE" in tech-debt.md.
+      hostName = "idp";
       port = 443;
       useLocalTailscaled = false; # read the header
       enableFunnel = false;       # nothing here belongs on the public internet
@@ -131,39 +109,4 @@ in
     wants = [ "network-online.target" ];
   };
 
-  # ---------------------------------------------------- the front door ------
-  # No reverse proxy, no open port, no certificate management. Requires
-  # MagicDNS and HTTPS Certificates enabled in the tailnet admin console — the
-  # same prerequisite tsidp has.
-  #
-  # Runs as root, so services.tailscale.permitCertUid is not needed; that
-  # option exists for non-root callers of `tailscale cert`.
-  #
-  # No conflict with this box also being an exit node: serve binds the node's
-  # own 100.x address on 443, which arrives on tailscale0 and is already in
-  # networking.firewall.trustedInterfaces. Exit-node traffic is forwarded IP
-  # and never reaches this listener.
-  systemd.services.tailscale-serve-immich = {
-    description = "Publish Immich on the tailnet over HTTPS (tailscale serve)";
-
-    after = [ "tailscaled.service" "network-online.target" ];
-    wants = [ "network-online.target" ];
-    requires = [ "tailscaled.service" ];
-    wantedBy = [ "multi-user.target" ];
-
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      ExecStart = serveScript;
-      # Allowed for oneshot; only `always` and `on-success` are rejected.
-      Restart = "on-failure";
-      RestartSec = "60s";
-      # Type=oneshot disables TimeoutStartSec by default. The wait loop above
-      # is bounded, but do not rely on that alone.
-      TimeoutStartSec = "120s";
-    };
-
-    # Deliberately NO ExecStop calling `tailscale serve reset`: a unit restart
-    # during a deploy would otherwise briefly take the front door away.
-  };
 }

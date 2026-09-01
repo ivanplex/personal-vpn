@@ -174,7 +174,10 @@ in
       newVersionCheck.enabled = false;
 
       server = {
-        externalDomain = "https://hong-kong.shark-kitefin.ts.net";
+        # Immich's own tsnet node — see ./frontdoor.nix. This must match
+        # the name the browser used, or OAuth redirects bounce to the
+        # wrong origin and share links point somewhere unreachable.
+        externalDomain = "https://immich.shark-kitefin.ts.net";
         publicUsers = false;
       };
 
@@ -197,7 +200,7 @@ in
 
         # Created by hand in tsidp's admin UI — see the runbook in
         # hosts/hong-kong/services.nix. The ID is not a secret; the secret is.
-        clientId = "REPLACE-ME-WITH-THE-TSIDP-CLIENT-ID";
+        clientId = "127eb5a31f4804aee40b282d618052cd";
         clientSecret._secret = config.sops.secrets.immich-oauth-client-secret.path;
 
         scope = "openid email profile";
@@ -220,7 +223,7 @@ in
         # forwards to it, so only https URIs need registering with the IdP.
         mobileOverrideEnabled = true;
         mobileRedirectUri =
-          "https://hong-kong.shark-kitefin.ts.net/api/oauth/mobile-redirect";
+          "https://immich.shark-kitefin.ts.net/api/oauth/mobile-redirect";
       };
 
       ffmpeg = {

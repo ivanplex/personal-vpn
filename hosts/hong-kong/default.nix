@@ -11,11 +11,11 @@
 { config, lib, pkgs, ... }:
 
 {
-  # PHASE 5, stage 2: the array, sops-nix, and tsidp. NOT ./immich.nix yet —
-  # it needs an OIDC client ID that only a running tsidp can issue, so it lands
-  # in stage 4. Widen to ./services.nix (all four) then. The staging rationale
-  # and the full runbook are the header of ./services.nix.
-  imports = [ ./disko.nix ./storage.nix ./secrets.nix ./identity.nix ];
+  # PHASE 5, stage 4: all of it. ./services.nix aggregates storage, secrets,
+  # identity and immich — the OIDC client was issued on 2026-09-01, so the
+  # last blocker is gone. The staging rationale and the full runbook are the
+  # header of ./services.nix.
+  imports = [ ./disko.nix ./services.nix ];
 
   networking.hostName = "hong-kong";
 

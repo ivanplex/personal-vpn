@@ -9,7 +9,10 @@
 #   storage.nix   the 7 TB array, and only that. No users, no services, no
 #                 secrets — so it deploys and is rehearsed entirely on its own.
 #   secrets.nix   sops-nix setup, scoped to this host
-#   identity.nix  tsidp (OIDC) and the tailscale serve front door
+#   identity.nix  tsidp (OIDC), on its own tsnet node
+#   frontdoor.nix Immich's own tsnet node, so it answers to
+#                 immich.shark-kitefin.ts.net. Revert this one import and
+#                 Immich is simply unreachable — nothing else changes.
 #   immich.nix    the library directory, Immich, and the memory caps
 #
 # Each secret is declared in the file that consumes it, so STAGING IS DONE BY
@@ -117,21 +120,32 @@
 #   tailscale/acl.hujson already grants autogroup:admin the tsidp capability on
 #   tag:container. Create a client with redirect URIs:
 #
-#       https://hong-kong.shark-kitefin.ts.net/auth/login
-#       https://hong-kong.shark-kitefin.ts.net/user-settings
-#       https://hong-kong.shark-kitefin.ts.net/api/oauth/mobile-redirect
+#       https://immich.shark-kitefin.ts.net/auth/login
+#       https://immich.shark-kitefin.ts.net/user-settings
+#       https://immich.shark-kitefin.ts.net/api/oauth/mobile-redirect
+#
+#   NOT hong-kong.* — Immich has its own tsnet node since 2026-09-01. See
+#   ./frontdoor.nix. The UI is server-rendered, so this is scriptable:
+#       curl -s https://idp.shark-kitefin.ts.net/clients/          # list
+#       curl -s -X POST https://idp.shark-kitefin.ts.net/new \
+#            --data-urlencode 'name=Immich' \
+#            --data-urlencode $'redirect_uris=URI1\nURI2\nURI3'
+#       curl -s -X POST https://idp.shark-kitefin.ts.net/edit/<client_id> ...
+#   Authorisation is by tailnet identity, so run it from an admin device.
 #
 #   The secret is shown ONCE. Put it in secrets/hong-kong.yaml as
 #   `immich-oauth-client-secret`, and paste the client ID into immich.nix.
 #
 # -- 4. Immich --------------------------------------------------------------
 #
-#   imports = [ ./storage.nix ./secrets.nix ./identity.nix ./immich.nix ];
+#   imports = [ ./storage.nix ./secrets.nix ./identity.nix
+#              ./frontdoor.nix ./immich.nix ];
 #
-#       systemctl status immich-server postgresql tailscale-serve-immich
+#       systemctl status immich-server postgresql \
+#                        tailscaled-immich immich-front-door
 #       journalctl -u immich-server | grep -i "mount folder checks"
 #
-#   Browse https://hong-kong.shark-kitefin.ts.net. Immich makes the FIRST user
+#   Browse https://immich.shark-kitefin.ts.net. Immich makes the FIRST user
 #   the admin, whichever way they sign in. Upload a photo and a video; confirm
 #   the files land under /mnt/storage/immich and that the log shows VAAPI
 #   rather than software transcoding.
@@ -151,6 +165,7 @@
     ./storage.nix
     ./secrets.nix
     ./identity.nix
+    ./frontdoor.nix
     ./immich.nix
   ];
 }
