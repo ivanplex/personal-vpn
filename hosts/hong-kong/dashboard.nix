@@ -72,7 +72,13 @@ let
   # null  -> login form only, no OIDC, no OIDC secret declared.
   # "..." -> the client id tsidp printed when you registered the client.
   # The ID is not a secret; the secret is, and it lives in sops.
-  oidcClientId = null;
+  #
+  # Registered with tsidp on 2026-09-01 against the single redirect URI
+  # https://grafana.shark-kitefin.ts.net/login/generic_oauth. Setting this
+  # non-null is what declares grafana-oauth-client-secret AND enables the
+  # whole auth.generic_oauth block below — so putting the secret in sops
+  # FIRST is the rule here exactly as it was for the admin password.
+  oidcClientId = "9876778ac89351d17411795b17fbd444";
   oidcEnabled = oidcClientId != null;
 
   # Who gets Admin. Everybody else who signs in through tsidp gets Viewer.
@@ -273,6 +279,15 @@ in
         access = "proxy";
         url = "http://127.0.0.1:9090";
         isDefault = true;
+
+        # `editable` is left at the nixpkgs default of FALSE, which is why the
+        # datasource page shows a "added by config and cannot be modified
+        # using the UI" banner and no working Save & test button. That is the
+        # intended state — the datasource is a file, like the dashboards — but
+        # it does mean the obvious way to health-check it is not available.
+        # Use Explore with the query `up` instead, or just look at whether the
+        # Fleet overview panels draw.
+
         jsonData = {
           # Match the scrape interval so Grafana does not offer a resolution
           # the data cannot support.

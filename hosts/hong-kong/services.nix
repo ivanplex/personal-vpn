@@ -262,7 +262,10 @@
 #      Browse https://grafana.shark-kitefin.ts.net. The first TLS handshake on
 #      a new name can take a few minutes while the certificate issues. Sign in
 #      as `ivan` with the password from (a), and check:
-#        * Connections -> Data sources -> Prometheus -> "Save & test" is green.
+#        * Explore -> datasource Prometheus -> query `up` -> Run query. One
+#          row per scrape target, value 1 or 0. This is the check, NOT
+#          "Save & test" on the data source page: the data source is
+#          provisioned with editable = false, so that button is not available.
 #        * All three dashboards are present and drawing: Fleet overview,
 #          Services, Deploys.
 #        * Alerting -> Alert rules lists the Prometheus rules read-only. If it
@@ -270,8 +273,8 @@
 #          load-bearing — the authority is Prometheus's own /alerts page
 #          through the tunnel from stage 6.
 #
-#   c) Then, and only then, OIDC. Register the client with tsidp exactly as in
-#      stage 3, with ONE redirect URI:
+#   c) Then, and only then, OIDC. DONE 2026-09-01 — client
+#      9876778ac89351d17411795b17fbd444, ONE redirect URI:
 #
 #          https://grafana.shark-kitefin.ts.net/login/generic_oauth
 #
@@ -279,7 +282,28 @@
 #               --data-urlencode 'name=Grafana' \
 #               --data-urlencode 'redirect_uris=https://grafana.shark-kitefin.ts.net/login/generic_oauth'
 #
-#      The secret is shown ONCE. Put it in secrets/hong-kong.yaml as
+#      TWO THINGS THE IMMICH RUNBOOK DOES NOT WARN YOU ABOUT, both learned
+#      doing this:
+#
+#      * tsidp's admin endpoints answer HTML, not JSON. Only /clients/ returns
+#        JSON. POST /new CREATES THE CLIENT and hands you the one-time secret
+#        inside the response body — so if you discard that body, the client
+#        exists and the secret is gone.
+#      * Recovering from that does NOT require deleting the client. The edit
+#        page has a regenerate action, and it is a plain form POST:
+#
+#          curl -s -X POST https://idp.shark-kitefin.ts.net/edit/<client_id> \
+#               --data-urlencode 'action=regenerate_secret' \
+#               --data-urlencode 'name=Grafana' \
+#               --data-urlencode 'redirect_uris=<the same URI>'
+#
+#        Send `name` and `redirect_uris` along with it — the handler takes the
+#        whole form. The new secret comes back in an <input id="client-secret">,
+#        64 chars, and the OLD ONE STOPS WORKING IMMEDIATELY. Harmless if
+#        nothing is using it yet; not harmless once Grafana is authenticating
+#        against it.
+#
+#      Put the secret in secrets/hong-kong.yaml as
 #      `grafana-oauth-client-secret`, paste the client ID into oidcClientId in
 #      ./dashboard.nix — replacing the null, quotes included — and deploy. Both
 #      the secret declaration and the whole auth.generic_oauth block are keyed
