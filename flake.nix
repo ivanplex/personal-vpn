@@ -13,9 +13,12 @@
     comin.inputs.nixpkgs.follows = "nixpkgs";
 
     # ---- PHASE 3b ---------------------------------------------------------
-    # Uncomment with the matching imports in modules/phase3.nix. Not before:
-    # sops needs a host key that does not exist until a machine has been
-    # installed once.
+    # Uncomment together with the module line below, then run `nix flake lock`
+    # and COMMIT flake.lock — comin cannot deploy without it (operating rule 1).
+    #
+    # Consumed by hosts/hong-kong/secrets.nix, not by modules/phase3.nix, which
+    # is still only a sketch. Not before: sops needs a host key that does not
+    # exist until a machine has been installed once.
     #
     # sops-nix.url = "github:Mic92/sops-nix";
     # sops-nix.inputs.nixpkgs.follows = "nixpkgs";
@@ -41,8 +44,15 @@
           ./modules/comin.nix
 
           # ---- PHASE 3b ----
+          # Inert until a host declares sops.secrets: sops-nix's own config is
+          # `mkIf (cfg.secrets != {})`, so importing this leaves shanghai — which
+          # has no secrets file and must not move — building exactly as before.
+          #
+          # Only hong-kong declares any, in hosts/hong-kong/secrets.nix.
+          # modules/phase3.nix stays out: its comin block describes an older
+          # ssh-deploy-key design that conflicts with the live modules/comin.nix.
+          #
           # inputs.sops-nix.nixosModules.sops
-          # ./modules/phase3.nix
 
           (./hosts + "/${name}")
         ];
