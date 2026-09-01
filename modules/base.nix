@@ -104,6 +104,17 @@
     openFirewall = true;
   };
 
+  # Same reasoning as tailscaled's OOMScoreAdjust in modules/tailscale-node.nix:
+  # sshd is the second way in and costs a few MB, so it must outlive anything
+  # that eats memory.
+  #
+  # Leave systemd.oomd alone while you are here. It defaults to enabled but with
+  # enableRootSlice / enableSystemSlice / enableUserSlices all false, so it runs
+  # and manages nothing. enableSystemSlice = true would put
+  # ManagedOOMMemoryPressure=kill on system.slice — which contains tailscaled
+  # and sshd, i.e. the exact opposite of what these two lines are for.
+  systemd.services.sshd.serviceConfig.OOMScoreAdjust = -900;
+
   networking.firewall.enable = true;
   # Trust the tailnet interface; expose nothing else by default.
   networking.firewall.trustedInterfaces = [ "tailscale0" ];

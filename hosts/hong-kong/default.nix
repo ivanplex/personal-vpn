@@ -11,7 +11,11 @@
 { config, lib, pkgs, ... }:
 
 {
-  imports = [ ./disko.nix ];
+  # PHASE 5, stage 1: the 7 TB array on its own. No users, no services, no
+  # secrets — just a nofail mount, so this stage can be proven before anything
+  # depends on it. Widen to ./services.nix once the prerequisites listed at the
+  # bottom of this file are met.
+  imports = [ ./disko.nix ./storage.nix ];
 
   networking.hostName = "hong-kong";
 
@@ -34,10 +38,31 @@
   boot.kernelModules = [ "kvm-intel" ];
 
   # ---- PHASE 5: workloads ---------------------------------------------------
-  # Immich, Prometheus, Grafana and the 7 TB disk arrive here, last, once
-  # every safety net underneath them has been rehearsed. The external disk
-  # MUST be mounted with `nofail` so a USB dropout degrades Immich instead of
-  # holding up the boot and turning a disk hiccup into an unreachable machine.
+  # Immich on the 7 TB array, tsidp for OIDC, and the tailscale serve front
+  # door. All written and reviewed in ./services.nix and the four files it
+  # imports, but NOT WIRED IN HERE YET, because the later stages cannot
+  # evaluate until out-of-band state exists that no commit can carry:
   #
-  # imports = [ ./services.nix ];
+  #   * secrets/hong-kong.yaml must exist and be encrypted to this host's age
+  #     key — sops.defaultSopsFile is a path, so eval fails without it.
+  #   * flake.nix's sops-nix input and module must be uncommented and
+  #     `nix flake lock` run, or comin cannot deploy at all (operating rule 1).
+  #   * immich.nix needs a client ID that only a running tsidp can issue.
+  #
+  # None of that is true of the disk, though. ./storage.nix is a bare
+  # fileSystems entry with no users, services or secrets, its UUID is already
+  # filled in, and it is the piece whose failure mode most needs rehearsing —
+  # so it goes first, on its own:
+  #
+  #     imports = [ ./disko.nix ./storage.nix ];
+  #
+  # then widen to the full set once the later prerequisites are met:
+  #
+  #     imports = [ ./disko.nix ./services.nix ];
+  #
+  # Left disabled rather than gated on builtins.pathExists, so that a missing
+  # prerequisite is loud rather than a silent non-deployment. The stage-by-stage
+  # runbook — including why tsidp has to be deployed before Immich can be
+  # configured, and how to try a stage without touching `main` — is the header
+  # of ./services.nix.
 }

@@ -44,7 +44,18 @@
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
 
-    # Do not let a Tailscale hiccup delay boot indefinitely.
-    serviceConfig.TimeoutStartSec = "30s";
+    serviceConfig = {
+      # Do not let a Tailscale hiccup delay boot indefinitely.
+      TimeoutStartSec = "30s";
+
+      # PHASE 5. hong-kong now runs Immich, Postgres and a comin evaluation of
+      # this flake on 7.6 GB. Under a global OOM the kernel picks by oom_score,
+      # and the one process it must never pick is the only way back into the
+      # machine. -900 makes tailscaled effectively last.
+      #
+      # NOT MemoryMin: cgroup v2 memory.min is clamped by every ancestor, and
+      # neither system.slice nor -.slice sets one, so it would be inert.
+      OOMScoreAdjust = -900;
+    };
   };
 }
