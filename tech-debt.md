@@ -294,8 +294,57 @@ There is no way to assert this from Nix: `settings.hostName` is only a
       (raw, for the immich node). Deliberately one key with two encodings —
       one credential to rotate, not two.
       **Cost of rotating is near zero**: `TS_AUTH_KEY` is only read when the
-      tsnet state directory is empty, so the running `idp` node is unaffected
-      and does not re-register.
+      tsnet state directory is empty, so the running `idp` and `immich` nodes
+      are unaffected and do not re-register. Create the new key and deploy it
+      BEFORE revoking the old one — if revocation ever did deregister a node,
+      it would re-register into the name-collision trap and come back as
+      `idp-1` / `immich-1`, taking the OIDC issuer and the Immich URL with it.
+
+#### Verifying an auth key without touching `idp` or `immich`
+
+Proven 2026-09-01 on the current key: it registered a third node with no human
+interaction, tagged. That is **reusable** and **pre-approved** and **tagged**
+demonstrated directly, without wiping any state dir that matters.
+
+    ssh hong-kong.shark-kitefin.ts.net
+    sudo mkdir -p /tmp/keytest
+    sudo env STATE_DIRECTORY=/tmp/keytest \
+      tailscaled --tun=userspace-networking --socket=/tmp/keytest/sock \
+                 --statedir=/tmp/keytest --port=0 &
+    sleep 3
+    sudo tailscale --socket=/tmp/keytest/sock up \
+      --auth-key=file:/run/secrets/tailscale-authkey \
+      --hostname=keytest --accept-dns=false --accept-routes=false
+
+**`STATE_DIRECTORY` is not optional, and `--statedir` does not cover it.**
+tailscaled's logpolicy reads `$STATE_DIRECTORY` and otherwise falls back to the
+hardcoded `/var/lib/tailscale` — the REAL daemon's directory — regardless of
+`--statedir`, which only governs node state. The first run of this recipe
+omitted it and logged `logpolicy: using system state directory
+"/var/lib/tailscale"`. No harm done that time (`tailscaled.state` and
+`tailscaled.log.conf` mtimes both confirmed unchanged; only the shared
+`tailscaled.log*.txt` buffers were touched) but it is not a thing to repeat.
+
+This is also why `frontdoor.nix` is safe: systemd's `StateDirectory=` exports
+`$STATE_DIRECTORY`, and `tailscaled-immich` correctly logs
+`logpolicy: using $STATE_DIRECTORY, "/var/lib/tailscale-immich"`. Verified.
+
+Cleanup, and two traps in it:
+
+    # NOT `pkill -f keytest` — the pattern matches your own ssh command line
+    # and kills the session. Resolve PIDs first, then kill by number.
+    ps -eo pid,args --no-headers | grep '[t]ailscaled' | grep tmp/keytest
+    sudo kill <pid>
+    sudo rm -rf /tmp/keytest
+
+    # `tailscale logout` does NOT remove the node. Delete `keytest` in the
+    # admin console by hand.
+
+- [ ] Delete the leftover `keytest` node (`100.97.6.9`) in the admin console.
+      While it sits there offline it doubles as the **ephemerality test**: an
+      ephemeral node is deleted by the coordination server shortly after going
+      offline, so if `keytest` is still listed an hour after 16:41 on
+      2026-09-01, the key is non-ephemeral — the last of the four properties.
 
 ### Stage 4 — Immich — DEPLOYED 2026-09-01, running under `test`
 
