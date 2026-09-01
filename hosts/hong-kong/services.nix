@@ -15,6 +15,19 @@
 #                 Immich is simply unreachable — nothing else changes.
 #   immich.nix    the library directory, Immich, and the memory caps
 #
+#   metrics.nix   Prometheus: what is scraped, how long it is kept, and the
+#                 alert rules. No secrets, no UI, loopback only — so it is
+#                 deployable and verifiable entirely on its own.
+#   dashboard.nix Grafana: the OIDC client, the provisioned datasource and the
+#                 dashboards under ./dashboards/.
+#   grafana-frontdoor.nix  Grafana's own tsnet node, so it answers to
+#                 grafana.shark-kitefin.ts.net. Revert this one import and the
+#                 dashboard is unreachable — nothing else changes.
+#
+# The exporter every host runs is NOT here. It is on the flake spine, in
+# modules/observability-node.nix, because shanghai needs it too and it has
+# nothing host-specific in it.
+#
 # Each secret is declared in the file that consumes it, so STAGING IS DONE BY
 # COMMENTING OUT IMPORT LINES BELOW — never by commenting out blocks inside a
 # file. Half a file does not evaluate: comment out the services.immich block
@@ -156,6 +169,148 @@
 #   If you would rather isolate an OIDC failure from an Immich failure, set
 #   oauth.enabled = false for this deploy and flip it in a second one. That is
 #   a one-word edit, not a commented-out block.
+#
+# -- 5. The exporters, on their own -----------------------------------------
+#
+#   Nothing to import here: modules/observability-node.nix is on the flake
+#   spine, so this stage arrives with any deploy after it lands. It is the
+#   cheapest stage in the file — one extra process, no secret, no mount, no
+#   port reachable from off the tailnet.
+#
+#       systemctl status prometheus-node-exporter
+#       curl -s localhost:9100/metrics | grep -c '^node_'
+#       curl -s localhost:9100/metrics | grep -c '^node_systemd_unit_state'
+#
+#   THE ONE THING THAT CAN FAIL HERE is the pair of opt-in systemd sub-flags,
+#   which gate 1 cannot check because a flag rename is a runtime error. If the
+#   unit is dead, look for "unknown long flag" in the journal and delete the
+#   two lines under IF ... FAILS TO START in modules/observability-node.nix.
+#   Confirm what the binary actually accepts:
+#
+#       prometheus-node-exporter --help 2>&1 | grep collector.systemd
+#
+#   Also confirm the reach, from the MacBook, because this is the property
+#   shanghai will depend on and the firewall is the only thing enforcing it:
+#
+#       curl -s http://hong-kong.shark-kitefin.ts.net:9100/metrics | head -1
+#
+# -- 6. Prometheus ----------------------------------------------------------
+#
+#   imports = [ ... ./metrics.nix ];
+#
+#   No secret, no UI, no new tailnet node. It binds 127.0.0.1 deliberately, so
+#   the only way to look at it is a tunnel from the MacBook:
+#
+#       ssh -N -L 9090:127.0.0.1:9090 ivan@hong-kong.shark-kitefin.ts.net
+#
+#   Then, at http://127.0.0.1:9090:
+#       /targets   every job UP. `node`, `comin` and `prometheus` at this stage.
+#       /rules     22 rules, all in state "ok" — a rule that cannot parse shows
+#                  as an error here, though promtool should have failed the
+#                  build in CI long before.
+#       /alerts    inactive is the correct state. Any rule that is FIRING on
+#                  the first evaluation is a rule that is wrong, not a machine
+#                  that is broken; fix it before it teaches you to ignore it.
+#
+#   Then leave it alone for a day. Two things are only visible with time
+#   behind them: whether the TSDB grows the way metrics.nix predicts
+#   (du -sh /var/lib/prometheus2, expect tens of MB a day), and whether
+#   anything flaps.
+#
+# -- 7. Grafana -------------------------------------------------------------
+#
+#   IN THIS ORDER. Step (a) is the one that must not be skipped.
+#
+#   a) DONE 2026-09-01 — two secrets into sops, BEFORE anything was pushed.
+#      Both were generated with `openssl rand -base64` and set with `sops set`,
+#      so neither has ever been typed, displayed or written to a shell history:
+#
+#          sops set secrets/hong-kong.yaml '["grafana-admin-password"]' "\"$PW\""
+#          sops set secrets/hong-kong.yaml '["grafana-secret-key"]'     "\"$SK\""
+#
+#      Read the admin password back the first time you need it, and put it in
+#      the password manager then:
+#
+#          sops -d --extract '["grafana-admin-password"]' secrets/hong-kong.yaml
+#
+#      It is BREAK GLASS — the way into the dashboard on the day tsidp is the
+#      thing that is broken. The SECRET KEY is not a login: it signs Grafana's
+#      session cookie, and nixpkgs otherwise leaves it at Grafana's shipped
+#      default, which is published in the manual. See settings.security in
+#      ./dashboard.nix.
+#
+#      IF YOU EVER RE-KEY THIS FILE, both keys must survive the operation, or
+#      the two imports below have to be commented out FIRST. A declared secret
+#      that is missing from the file fails sops-install-secrets during
+#      ACTIVATION, and comin neither rolls back nor retries that generation.
+#
+#   b) Uncomment ./dashboard.nix and ./grafana-frontdoor.nix above — DONE —
+#      and deploy.
+#      OIDC is off at this point by design: oidcClientId in dashboard.nix is
+#      null, so Grafana comes up with the login form only and declares no
+#      OIDC secret at all. One thing at a time.
+#
+#          systemctl status grafana tailscaled-grafana grafana-front-door
+#          journalctl -u tailscaled-grafana | grep logpolicy
+#            # must say /var/lib/tailscale-grafana, NOT /var/lib/tailscale
+#
+#      Confirm the node appears in the admin console as `grafana`, TAGGED
+#      tag:container, expiry disabled. If it came up as `grafana-1` stop and
+#      read the name-collision warning in ./grafana-frontdoor.nix — every URL
+#      below is then wrong.
+#
+#      Browse https://grafana.shark-kitefin.ts.net. The first TLS handshake on
+#      a new name can take a few minutes while the certificate issues. Sign in
+#      as `ivan` with the password from (a), and check:
+#        * Connections -> Data sources -> Prometheus -> "Save & test" is green.
+#        * All three dashboards are present and drawing: Fleet overview,
+#          Services, Deploys.
+#        * Alerting -> Alert rules lists the Prometheus rules read-only. If it
+#          does not — this is a Grafana-version-dependent view and is NOT
+#          load-bearing — the authority is Prometheus's own /alerts page
+#          through the tunnel from stage 6.
+#
+#   c) Then, and only then, OIDC. Register the client with tsidp exactly as in
+#      stage 3, with ONE redirect URI:
+#
+#          https://grafana.shark-kitefin.ts.net/login/generic_oauth
+#
+#          curl -s -X POST https://idp.shark-kitefin.ts.net/new \
+#               --data-urlencode 'name=Grafana' \
+#               --data-urlencode 'redirect_uris=https://grafana.shark-kitefin.ts.net/login/generic_oauth'
+#
+#      The secret is shown ONCE. Put it in secrets/hong-kong.yaml as
+#      `grafana-oauth-client-secret`, paste the client ID into oidcClientId in
+#      ./dashboard.nix — replacing the null, quotes included — and deploy. Both
+#      the secret declaration and the whole auth.generic_oauth block are keyed
+#      off that one value, so this single edit turns the feature on.
+#
+#      TEST THE PASSWORD LOGIN AGAIN afterwards. That is the entire point of
+#      keeping it, and it is the check that was worth making for Immich.
+#
+#      Then read Administration -> Users. If your tailnet identity landed as
+#      Viewer rather than Admin, adminEmailDomain in dashboard.nix does not
+#      match the email claim tsidp actually issues — the same mismatch that
+#      quietly produced two Immich accounts on 2026-09-01. Fix the domain, do
+#      not fix the account.
+#
+# -- 8. What is deliberately still missing ----------------------------------
+#
+#   Alert DELIVERY. Every rule in ./metrics.nix evaluates, and every one of
+#   them surfaces in a web page nobody is looking at. architecture.md:221 is
+#   blunt about why that is not enough: Prometheus on hong-kong cannot alert
+#   you that hong-kong is down, and with two nodes there is no third machine
+#   to notice. Two separate pieces, and they are a separate change:
+#
+#     * Alertmanager, with a route to somewhere that reaches a phone.
+#     * An EXTERNAL dead-man's switch — a five-minute heartbeat from BOTH
+#       nodes to healthchecks.io or similar, so a missed ping reaches you even
+#       when the whole fleet is dark. The sketch is already in
+#       modules/phase3.nix, under "external witness".
+#
+#   Until those exist, "hong-kong has been healthy for 24 hours" — the soak
+#   gate that governs when `stable` may fast-forward — is still something you
+#   assert by looking, not something that is watched.
 # ===========================================================================
 
 { ... }:
@@ -167,5 +322,29 @@
     ./identity.nix
     ./frontdoor.nix
     ./immich.nix
+
+    # ---- PHASE 5, stages 5-8: monitoring --------------------------------
+    # Prometheus first, on its own. It declares no secrets and binds nothing
+    # but loopback, so it cannot fail an activation and cannot be reached
+    # from off the box. Stage 6.
+    ./metrics.nix
+
+    # Grafana. The prerequisite these two waited on is DONE: both
+    # grafana-admin-password and grafana-secret-key were added to
+    # secrets/hong-kong.yaml on 2026-09-01, before this line was uncommented,
+    # and in that order — sops-nix does not shrug at a declared secret that is
+    # absent from the file, sops-install-secrets fails during ACTIVATION, and
+    # comin at the pinned revision neither rolls back nor retries a generation
+    # it has already failed.
+    #
+    # If you ever re-key or regenerate secrets/hong-kong.yaml, THAT ORDER IS
+    # STILL THE RULE. Comment these two lines back out before removing either
+    # key, not after.
+    #
+    # OIDC is still off: oidcClientId in ./dashboard.nix is null, so Grafana
+    # comes up with the login form only and declares no OIDC secret at all.
+    # Stage 7(c) turns it on, as its own deploy.
+    ./dashboard.nix
+    ./grafana-frontdoor.nix
   ];
 }

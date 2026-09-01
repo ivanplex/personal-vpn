@@ -59,15 +59,35 @@ are not finished, and nothing later matters.
 
 ```
 flake.nix                     both hosts, one spine
-hosts/hong-kong/              Hong Kong: hardware notes + disk layout
+hosts/hong-kong/              Hong Kong: hardware, disk layout, workloads
 hosts/shanghai/               Shanghai: hardware NOT yet confirmed
 modules/base.nix              bootloader, nix settings, users, sshd, firewall
 modules/tailscale-node.nix    exit node, native (not containerised)
 modules/boot-verdict.nix      GATES 3 AND 4 — read this one properly
+modules/observability-node.nix  node_exporter — every host, on the spine
 modules/phase3.nix            sops + comin + heartbeat, not yet imported
 .github/workflows/build.yml   GATE 1
 tailscale/                    tailnet policy — ACL, tags, autoApprovers (Terraform)
 ```
+
+`hosts/hong-kong/services.nix` is the aggregator for everything in phase 5 —
+storage, secrets, tsidp, Immich, Prometheus, Grafana — and its header is the
+stage-by-stage runbook for all of it. Staging is done by commenting import
+lines there, never by commenting blocks inside a file.
+
+## Where to look at things
+
+| | |
+|---|---|
+| `https://immich.shark-kitefin.ts.net` | photos |
+| `https://idp.shark-kitefin.ts.net` | tsidp — OIDC for the tailnet |
+| `https://grafana.shark-kitefin.ts.net` | fleet dashboards — sign in as `ivan`, password in sops |
+| `ssh -N -L 9090:127.0.0.1:9090 ivan@hong-kong.shark-kitefin.ts.net` | Prometheus, which binds loopback only |
+
+Each of the three names is its own tsnet node on hong-kong, because
+`tailscale serve` publishes on the serving node's own MagicDNS name and there
+are no CNAMEs in `ts.net`. `hong-kong.shark-kitefin.ts.net` itself is the
+machine: SSH, and nothing else.
 
 ## Tailnet policy
 
@@ -120,5 +140,8 @@ If you have not seen it happen, you do not have the feature.
   See `modules/phase3.nix`.
 - **4 — rehearse the gates.** Then Shanghai ships.
 - **5 — workloads.** Immich, Prometheus, Grafana, the 7 TB disk, Attic.
+  Staged 1-8 in `hosts/hong-kong/services.nix`. Stages 1-7(b) are imported;
+  Grafana's OIDC (7c) waits on a tsidp client, and alert delivery plus the
+  external heartbeat (8) is not written at all.
 
 After phase 3, SSH is for **looking**. Every change goes through this repo.

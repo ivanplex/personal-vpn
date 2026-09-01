@@ -37,6 +37,15 @@
           ./modules/tailscale-node.nix
           ./modules/boot-verdict.nix      # gates 3 and 4
 
+          # ---- PHASE 5: monitoring ----
+          # On the spine, not on a host, so a machine is observable the moment
+          # it exists — architecture.md:203 lists exporters as part of
+          # shanghai's duty too. It opens a metrics port on the tailnet
+          # interface and nothing else: no secret, no mount, no boot-time
+          # dependency. The things that SCRAPE it are hong-kong's alone, in
+          # hosts/hong-kong/metrics.nix.
+          ./modules/observability-node.nix
+
           inputs.comin.nixosModules.comin
           ./modules/comin.nix
 

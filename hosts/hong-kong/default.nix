@@ -11,10 +11,10 @@
 { config, lib, pkgs, ... }:
 
 {
-  # PHASE 5, stage 4: all of it. ./services.nix aggregates storage, secrets,
-  # identity and immich — the OIDC client was issued on 2026-09-01, so the
-  # last blocker is gone. The staging rationale and the full runbook are the
-  # header of ./services.nix.
+  # ./services.nix aggregates every phase-5 workload — storage, secrets,
+  # identity, Immich, and now Prometheus — and its header is the
+  # stage-by-stage runbook for all of it. Staging is done by commenting import
+  # lines THERE, not here and not inside a file.
   imports = [ ./disko.nix ./services.nix ];
 
   networking.hostName = "hong-kong";
@@ -38,17 +38,22 @@
   boot.kernelModules = [ "kvm-intel" ];
 
   # ---- PHASE 5: what is still not wired in --------------------------------
-  # ./immich.nix is written and reviewed but not imported. It cannot be until
-  # tsidp has issued an OIDC client ID and secret, which requires tsidp to be
-  # running first — stages 3 and 4 of the runbook in ./services.nix.
+  # Stages 1-7(b) are all imported now: the array, sops, tsidp, Immich,
+  # Prometheus, Grafana and its tsnet node. What is left:
   #
-  # When it lands, replace the imports above with:
+  #   Stage 7(c) — OIDC for Grafana. `oidcClientId` in ./dashboard.nix is
+  #   null, which is a WORKING configuration, not a placeholder: Grafana comes
+  #   up with the login form only and declares no OIDC secret at all. tsidp
+  #   has to issue the client first, exactly as it did for Immich.
   #
-  #     imports = [ ./disko.nix ./services.nix ];
+  #   Stage 8 — alert delivery, not written at all. Alertmanager and the
+  #   external dead-man's-switch heartbeat, without which Prometheus on
+  #   hong-kong is a thing that knows hong-kong is dying and cannot tell
+  #   anyone.
   #
-  # which is exactly the same four files, via the aggregator.
-  #
-  # Note ./immich.nix asserts at eval time that a filesystem is declared at its
-  # mediaLocation's parent, so it cannot be imported without ./storage.nix and
-  # quietly build a photo library on the root SSD.
+  # Note the eval-time assertions that make partial imports impossible:
+  # ./immich.nix refuses to build unless a filesystem is declared at its
+  # mediaLocation's parent (so it cannot quietly build a photo library on the
+  # root SSD); ./dashboard.nix refuses unless Prometheus is enabled; and
+  # ./grafana-frontdoor.nix refuses unless Grafana is.
 }

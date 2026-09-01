@@ -154,15 +154,15 @@ is imported by `hosts/hong-kong/default.nix` today.
 ### ⚠️ Live state you will forget
 
 - [x] Stage 1 (the mount) is on `main` (`8c9279e`) and persistent.
-- [ ] **Stage 2 (sops-nix + tsidp) is on `testing-hong-kong` (`80702fc`),
-      applied with `test`.** comin does not touch the bootloader for the testing
-      branch, so **a reboot drops back to stage 1** — no sops, no tsidp. That is
-      the intended safety valve, not a bug, but do not mistake a working tsidp
-      for a persistent one. It becomes real when the PR merges to `main`.
-- [ ] **The stage 2 deploy has not been verified.** Everything checked before
-      the rebase was still generation 2's config — see the divergence finding
-      below. This is the first real evaluation of `flake.nix` with sops-nix,
-      `secrets.nix` and `identity.nix`.
+- [x] Stage 2 verified: sops decrypts, `tsidp` is active, the issuer resolves.
+- [ ] **Stages 2–4 are ALL on `testing-hong-kong` (`0a8b4ac`), applied with
+      `test`.** comin deployed it at 17:09 on 2026-09-01 and does not touch
+      the bootloader for the testing branch, so **a reboot still drops back to
+      stage 1** — no sops, no tsidp, no Immich. That is the intended safety
+      valve, not a bug, but do not mistake a working Immich for a persistent
+      one. It becomes real when this merges to `main`. Confirmed on the box:
+      `loader.conf` still says `default nixos-comin-generation-2.conf`, and
+      comin-2-link is the last `main` deploy from 10:52.
 
 ### Stage 1 — the disk
 
@@ -210,12 +210,10 @@ is imported by `hosts/hong-kong/default.nix` today.
       `Tags=["tag:container"]`, `KeyExpiry` absent. Tagged matters: tagged
       devices do not expire, and a node key lapsing in 180 days on an
       unreachable box is a time bomb.
-- [ ] **Non-ephemeral: still open, and being tested for free right now.** The
-      stale `idp-1` node is offline. An *ephemeral* node is deleted by the
-      coordination server shortly after it goes offline. If `idp-1` is still
-      listed an hour after 12:07 on 2026-09-01, the key is non-ephemeral and
-      this box can be reinstalled without the issuer URL moving. Delete it by
-      hand afterwards — see the cleanup items below.
+- [~] **Non-ephemeral: never conclusively proven, and now moot for that key.**
+      Both `idp-1` and `keytest` were deleted by hand before either had sat
+      offline long enough to settle it, and the key has since been rotated.
+      Carried forward to the new key — see below.
 - [x] The `idp` node registers, carries the tag, and shows expiry disabled.
 - [x] HTTPS certificates and MagicDNS are enabled on the tailnet — proven by
       `https://idp.shark-kitefin.ts.net/.well-known/openid-configuration`
@@ -251,12 +249,8 @@ There is no way to assert this from Nix: `settings.hostName` is only a
 
 #### Cleanup left from the 2026-09-01 rename
 
-- [ ] Delete the stale `idp-1` node (`100.81.145.40`) in the admin console —
-      after it has served as the ephemerality test above.
-- [ ] `sudo rm -rf /var/lib/private/tsidp.bak-idp-1` on hong-kong. It is the
-      superseded state dir, kept only so the rename was reversible. It holds a
-      dead node key and the old `idp-1` certificate; inert, but it is secret
-      material with no remaining purpose.
+- [x] Stale `idp-1` node deleted. Tailnet now shows only `idp` and `immich`.
+- [x] `/var/lib/private/tsidp.bak-idp-1` removed from hong-kong.
 
 ### Stage 3 — the OIDC client — DONE 2026-09-01
 
@@ -277,9 +271,33 @@ There is no way to assert this from Nix: `settings.hostName` is only a
       the near-miss of earlier today, so it is checked every time now.
 - [x] Client ID → `hosts/hong-kong/immich.nix`.
 
-### 🟠 Rotate the tsidp auth key
+### Rotate the tsidp auth key — DONE 2026-09-01
 
-- [ ] **`TS_AUTH_KEY` in `secrets/hong-kong.yaml` was printed in cleartext to
+- [x] **Rotated and verified live.** The bare key value hashes identically in
+      all three places — `sops -d` on the repo file, `/run/secrets/tailscale-authkey`,
+      and the value inside `/run/secrets/tsidp-env` (`sha256[:12] = 61f5402c`).
+      Both encodings carry the same new credential, and both age recipients
+      survived the re-encryption.
+      tsidp confirmed the design prediction verbatim on restart:
+      `Authkey is set; but state is NoState. Ignoring authkey.` — the key is
+      only consulted when the tsnet state dir is empty, so neither running
+      node was disturbed and the issuer never moved.
+      **Revocation of the OLD key is only verifiable in the admin console** —
+      nothing on the box can confirm it.
+- [ ] **The NEW key's four properties are unverified.** Reusable,
+      non-ephemeral, pre-approved and tagged `tag:container` were all set by
+      hand at creation and nothing has exercised them. They matter only for an
+      unattended reinstall, which is exactly when you cannot afford to find
+      out. Prove them with the keytest recipe below, which does not touch
+      `idp` or `immich`.
+- [ ] **The new key expires within 90 days of creation (~2026-11-30).** Auth
+      keys have a hard 90-day maximum. This does not affect the running nodes,
+      but the unattended-reinstall property it exists for lapses silently on
+      that date. Worth a calendar reminder.
+
+#### The exposure this replaced (2026-09-01, resolved)
+
+- [x] **`TS_AUTH_KEY` in `secrets/hong-kong.yaml` was printed in cleartext to
       a terminal on 2026-09-01** while masking the decrypted sops output; the
       mask pattern did not account for the value being a YAML block scalar.
       It did not leave the machine or reach the repo, but it is in a
@@ -340,18 +358,16 @@ Cleanup, and two traps in it:
     # `tailscale logout` does NOT remove the node. Delete `keytest` in the
     # admin console by hand.
 
-- [ ] Delete the leftover `keytest` node (`100.97.6.9`) in the admin console.
-      While it sits there offline it doubles as the **ephemerality test**: an
-      ephemeral node is deleted by the coordination server shortly after going
-      offline, so if `keytest` is still listed an hour after 16:41 on
-      2026-09-01, the key is non-ephemeral — the last of the four properties.
+- [x] Leftover `keytest` node deleted from the admin console.
 
 ### Stage 4 — Immich — DEPLOYED 2026-09-01, running under `test`
 
-Activated with `nixos-rebuild test --flake /tmp/pv#hong-kong` from a copy of
-the working tree — the runbook's "no commit at all" path. **Not on any branch
-and not in the bootloader**, so a reboot reverts it. See the persistence note
-below.
+First activated with `nixos-rebuild test --flake /tmp/pv#hong-kong` from a copy
+of the working tree — the runbook's "no commit at all" path. Since committed
+and pushed as `0a8b4ac`, and **comin redeployed it from the testing branch at
+17:09**, so the box now runs the committed tree rather than a scratch copy.
+Still `test`, still **not in the bootloader**, so a reboot reverts it. See the
+persistence note below.
 
 - [x] Deploys and activates. `sops-install-secrets` decrypted
       `immich-oauth-client-secret` with the host key; `immich-media-setup`,
@@ -373,16 +389,42 @@ below.
       and `/api/server/features` reports `oauth: true`,
       `oauthAutoLaunch: false`, `passwordLogin: true` — the break-glass path
       is intact.
-- [ ] **First sign-up — do this promptly.** Immich makes the FIRST user the
-      admin, whichever way they sign in, and the tailnet's `acls` rule is
-      wide open with `autoRegister = true`. Until you claim it, any member of
-      the tailnet who reaches the page becomes the administrator.
-      The URL is now `https://immich.shark-kitefin.ts.net`.
-- [ ] Upload a photo and a video; confirm files land under
-      `/mnt/storage/immich` and the log shows VAAPI, not software transcoding.
-- [ ] Confirm OIDC login works, **and** that password login still works.
+- [x] First sign-up done, and OIDC login **works** — a user was auto-registered
+      from a Tailscale identity at 15:56.
+- [x] Media pipeline proven with 2 videos (299 MB) and 1 image (1150 kB).
+      Files are on the array — `upload/` 301 M, `encoded-video/` 89 M,
+      `thumbs/` 1.1 M — and the root disk did not move. **VAAPI confirmed**:
+      `Transcoding video … with VAAPI-accelerated encoding and decoding` for
+      both videos. Originals live in `upload/`, not `library/`; that is normal,
+      the storage template is off by default.
+- [ ] 🟠 **Two accounts exist, and the admin is not the one in daily use.**
+
+      | email | admin | password | assets |
+      |---|---|---|---|
+      | `hello@ivanchan.me` | yes | SET | 0 |
+      | `hello@whiteboxsoftware.hk` | **no** | NONE | **3** |
+
+      Created three seconds apart: the admin signup form made the first, then
+      "Sign in with Tailscale" made the second. **Immich links OAuth to an
+      existing account by matching email only**, and the tailnet identity
+      (`whiteboxsoftware.hk`) does not match the admin's (`ivanchan.me`), so it
+      created a new non-admin account rather than linking. The phone is on the
+      non-admin one, which owns every asset.
+      Fix while there are 3 assets and not 30,000: sign in as `ivanchan.me`
+      with the password and promote `hello@whiteboxsoftware.hk`. That leaves an
+      OAuth admin for daily use and a password admin for break-glass.
+      (See also the `extraClaims immich_role` note in `identity.nix` — Immich
+      only reads that claim at user creation, so it cannot fix this after the
+      fact.)
+- [ ] **Password login has never been exercised end to end.** The hash is set
+      on the admin account, but nobody has logged in that way. It is the entire
+      point of `passwordLogin.enabled = true`, and the one path you least want
+      to discover is broken during a tsidp outage. Note the OAuth account has
+      NO password, so `ivanchan.me` is the only break-glass identity.
 - [ ] Confirm the nightly `pg_dump` lands in `/mnt/storage/immich/backups`
-      (cron `30 03 * * *`, keeps 14).
+      (cron `30 03 * * *`, keeps 14). Still empty but for the `.immich` marker;
+      03:30 has not come round yet — **and it will not run at all if the box
+      reboots back to stage 1 first.**
 
 #### Immich moved to its own tailnet node — 2026-09-01
 
@@ -489,6 +531,29 @@ its job on this machine.
       tailscaled and sshd carry on. Never tested.
 - [ ] **Gate 3 and gate 4 on this box.** README.md:113 says to rehearse them
       before the machines leave your desk. They left.
+- [ ] **Every alert rule in `metrics.nix`.** 22 of them, none ever fired.
+      promtool checks that each one parses (`checkConfig` runs at build time,
+      so gate 1 catches a malformed rule) but nothing checks that it fires when
+      it should, or that the metric it names exists. `RootFilesystemFilling`
+      and `HostRebootLoop` are cheap to prove on `testing-hong-kong` with a
+      `fallocate` and a reboot; `KernelOomKilled` and `FilesystemReadOnly` are
+      not worth manufacturing.
+- [ ] **The observability memory budget.** `MemoryHigh=768M` / `MemoryMax=1G`
+      on `system-observability.slice`, 384 MB on Grafana, 128 MB on the node
+      exporter. Estimates, exactly like the Immich caps above, and stacked on
+      top of them: at the peak the box is already oversubscribed (base ~1 GB +
+      Postgres ~0.5 + Immich up to 3 + a comin evaluation at 1.5-3 on 7.6 GB
+      total). The design does not pretend otherwise — it manages it with the
+      `OOMScoreAdjust` ladder, and monitoring sits at 800, above Immich's 500,
+      so it is the first thing the kernel takes. Watch
+      `systemctl status system-observability.slice` for a week before
+      believing any of these numbers.
+- [ ] **A third `tailscaled` next to the other two.** `frontdoor.nix`'s
+      isolation was proven on 2026-09-01 by reading `logpolicy` out of the
+      journal. `grafana-frontdoor.nix` copies the mechanism exactly, and the
+      same check applies to it — but it has not been run:
+      `journalctl -u tailscaled-grafana | grep logpolicy` must name
+      `/var/lib/tailscale-grafana`, not `/var/lib/tailscale`.
 
 ---
 
@@ -526,6 +591,67 @@ its job on this machine.
       quietly lost. Still deferred.
 - [ ] **`.github/workflows/build.yml` references a `vm-boot` check** in a
       commented block. `flake.nix` does not define one.
+
+---
+
+## Debt created by the monitoring work — 2026-09-01
+
+- [ ] **Two hand-rolled tsnet front doors.** `hosts/hong-kong/frontdoor.nix`
+      (Immich) and `hosts/hong-kong/grafana-frontdoor.nix` are the same ~80
+      lines twice: a userspace `tailscaled` with `--tun=userspace-networking`,
+      `--accept-dns=false`, `--accept-routes=false`, `--port=0`, its own
+      `--socket`/`--statedir` and `StateDirectory=`, plus a oneshot that
+      `up`s and `serve`s. **A third one is the point at which this must be
+      factored**, into something like `fleet.tsnet.<name> = { hostName;
+      target; }` in `modules/`. It was not done now because `frontdoor.nix` is
+      deployed code carrying Immich's reachability, and refactoring it is a
+      change to Immich wearing the costume of a tidy-up.
+
+      The copy-paste hazard — pointing one file's `tailscale` calls at the
+      other node's socket — is closed structurally rather than by care:
+      everything in `grafana-frontdoor.nix` that distinguishes the two is
+      derived from a single `name = "grafana"` binding.
+
+- [ ] **Nothing delivers an alert.** The 22 rules evaluate and surface in a web
+      page nobody is looking at. architecture.md:221 is blunt about why that is
+      not enough, and there are two separate pieces missing:
+      **Alertmanager** with a route that reaches a phone, and an **external
+      dead-man's switch** — a five-minute heartbeat from both nodes to
+      healthchecks.io or similar, because Prometheus on hong-kong cannot alert
+      you that hong-kong is down and there is no third machine to notice. The
+      sketch is already in `modules/phase3.nix` under "external witness".
+      Until both exist, the 24-hour soak gate that governs when `stable` may
+      fast-forward is still something you assert by looking.
+
+- [ ] **`node_exporter`'s two opt-in systemd sub-flags are unverified.**
+      `--collector.systemd.enable-restarts-metrics` and
+      `--collector.systemd.enable-start-time-metrics` in
+      `modules/observability-node.nix`. Gate 1 cannot check a flag name — a
+      rename is a runtime failure, not an evaluation error. Blast radius is
+      one dead exporter and a gap in a graph, and the `ServiceRestartLoop` rule
+      is written so that a missing metric means silence rather than a false
+      alarm. Confirm with
+      `prometheus-node-exporter --help 2>&1 | grep collector.systemd`.
+
+- [ ] **Grafana reads its own secrets, unlike everything else in this repo.**
+      `grafana-admin-password`, `grafana-secret-key` and
+      `grafana-oauth-client-secret` are declared
+      with `owner = "grafana"` rather than the sops-nix default of
+      `0400 root:root`, because Grafana resolves `$__file{...}` itself after
+      dropping privileges — tsidp's `EnvironmentFile` and Immich's
+      `LoadCredential` are both read by PID 1 first. It is a wider permission
+      than anything else here. It is also the only shape that works.
+
+- [ ] **A missing secret is an activation failure, and there is no guard.**
+      `./dashboard.nix` declares `grafana-admin-password` and
+      `grafana-secret-key`. Both were added to `secrets/hong-kong.yaml` before
+      the imports were enabled, so the ordering hazard is closed *for now* —
+      but nothing enforces it. If either key is ever dropped while the import
+      stands, `sops-install-secrets` fails during activation, and per the comin
+      findings above that generation is not rolled back and will not be
+      retried; recovery is another commit. The mitigation is a runbook, not a
+      mechanism. An eval-time assertion cannot help: Nix cannot see inside an
+      encrypted file.
 
 ---
 
