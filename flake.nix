@@ -13,15 +13,12 @@
     comin.inputs.nixpkgs.follows = "nixpkgs";
 
     # ---- PHASE 3b ---------------------------------------------------------
-    # Uncomment together with the module line below, then run `nix flake lock`
-    # and COMMIT flake.lock — comin cannot deploy without it (operating rule 1).
-    #
     # Consumed by hosts/hong-kong/secrets.nix, not by modules/phase3.nix, which
-    # is still only a sketch. Not before: sops needs a host key that does not
-    # exist until a machine has been installed once.
-    #
-    # sops-nix.url = "github:Mic92/sops-nix";
-    # sops-nix.inputs.nixpkgs.follows = "nixpkgs";
+    # remains only a sketch. flake.lock MUST be regenerated and committed
+    # alongside any change here, or comin cannot deploy at all (rule 1) — and
+    # there is no nix on the MacBook, so `nix flake lock` runs on hong-kong.
+    sops-nix.url = "github:Mic92/sops-nix";
+    sops-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = { self, nixpkgs, disko, ... }@inputs:
@@ -51,8 +48,7 @@
           # Only hong-kong declares any, in hosts/hong-kong/secrets.nix.
           # modules/phase3.nix stays out: its comin block describes an older
           # ssh-deploy-key design that conflicts with the live modules/comin.nix.
-          #
-          # inputs.sops-nix.nixosModules.sops
+          inputs.sops-nix.nixosModules.sops
 
           (./hosts + "/${name}")
         ];

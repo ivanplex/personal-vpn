@@ -12,6 +12,101 @@ architecture.md:116 is the standard this repo holds itself to —
 
 ---
 
+## 🔴 Gates 3 and 4 do not work with comin (confirmed 2026-09-01)
+
+**comin deploys into its own Nix profile. Every safety mechanism in this repo
+reads a different one.** Nothing here is theoretical — it was confirmed on the
+box, and it is upstream of all the Immich work.
+
+### What was observed
+
+```
+booted   /nix/store/y4hzk5...   = system-6-link      (hand-run nixos-rebuild, Aug 31 20:31)
+current  /nix/store/sk8pcnc...  = comin-2-link       (what is actually running)
+/nix/var/nix/profiles/system -> system-6-link        (comin never touches this)
+/boot/loader/loader.conf: default nixos-comin-generation-2.conf   (correct)
+EFI LoaderEntryDefault:   nixos-generation-6.conf                 (wins, and is wrong)
+comin log:                "boot-arm: already running the latest generation (6)"
+```
+
+### Why
+
+`internal/profile/profile.go` in comin hardcodes
+
+```go
+const ( systemProfiles = "/nix/var/nix/profiles/system-profiles"
+        profileName    = "comin" )
+```
+
+so deployments land in `system-profiles/comin-N-link` and get boot entries named
+`nixos-comin-generation-N.conf`. It is **not configurable**.
+
+`modules/boot-verdict.nix` sets `profiles=/nix/var/nix/profiles` and reads
+`$profiles/system` and `$profiles/system-*-link` — the *default* profile, which
+comin never advances. (`system-profiles/` is not matched by that glob: no
+`-link` suffix.)
+
+### Consequences
+
+- [ ] **Every comin deployment is effectively `test`.** The EFI default points
+      at the last hand-run generation, so a reboot — planned, watchdog, or power
+      cut — silently reverts to the Aug 31 config.
+- [ ] **Gate 3 never arms anything.** `booted` and `latest` both resolve to 6
+      from the stale profile, so `armScript` short-circuits on
+      `"already running the latest generation"`.
+- [ ] **Gate 4 is inert the moment the box boots a comin generation.**
+      `booted_generation()` finds no match, and `verdictScript` prints
+      `"cannot identify the running generation; taking no action"` and exits 0.
+      No promotion, no rollback.
+- [ ] **`fleet-status` reports the wrong profile**, which is why this looked
+      healthy for days: a reassuring `booted 6 / latest 6 / promoted 6` while
+      comin had deployed something it cannot see.
+
+Both scripts fail *safely* — they no-op rather than misfire — which is why
+nothing broke. It is also exactly why nobody noticed.
+
+### The fix
+
+`boot-verdict.nix` has to learn about `system-profiles/comin` and the
+`nixos-comin-generation-N.conf` entry naming, in `genHelpers`, `armScript`,
+`verdictScript` (including the rollback target) and `fleetStatus`. The booted
+system may come from *either* profile during the transition, so the helpers
+must handle both. This is a rewrite of the most load-bearing file in the repo
+and deserves its own change, its own rehearsal, and its own PR.
+
+Interim options, both verified:
+
+- `sudo bootctl set-default ""` unsets `LoaderEntryDefault` — bootctl(1): *"When
+  an empty string ("") is specified as the ID, then the corresponding EFI
+  variable will be unset."* `loader.conf` then governs, and NixOS keeps it
+  pointing at the newest comin generation on every deploy. Self-maintaining,
+  but gives up the gate-3 fallback entirely.
+- `sudo systemctl reboot --boot-loader-entry=nixos-comin-generation-N.conf`
+  boots a chosen entry **once**, leaving the EFI default as the fallback. This
+  is gate 3's one-shot semantics done by hand, and is the safe way to test a
+  comin generation on a machine nobody can power-cycle.
+
+### Decision, 2026-09-01
+
+Interim fix **applied**: `LoaderEntryDefault` unset, so `loader.conf` governs and
+NixOS keeps it pointing at the newest comin generation. The proper
+`boot-verdict.nix` rewrite is **deferred until after Immich lands**.
+
+Know what that costs in the meantime: with the EFI default unset *and* gate 4
+inert, a newest generation that fails to BOOT has no automatic fallback — the
+watchdog reboots into the same entry. The 5-second boot menu is the only escape
+and this machine is headless. Until boot-verdict understands the comin profile,
+**the first boot of any materially new generation should happen while somebody
+can see a console.**
+
+### Knock-on: the drill
+
+Tonight's physical unplug drill must boot a generation that actually contains
+the mount. Booting the current EFI default would boot the Aug 31 generation,
+which has no `/mnt/storage` at all — it would "pass" while testing nothing.
+
+---
+
 ## Where PHASE 5 actually stands
 
 Immich, tsidp and the 7 TB array are written across `hosts/hong-kong/`:

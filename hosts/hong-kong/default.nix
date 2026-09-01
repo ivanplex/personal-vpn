@@ -11,11 +11,11 @@
 { config, lib, pkgs, ... }:
 
 {
-  # PHASE 5, stage 1: the 7 TB array on its own. No users, no services, no
-  # secrets — just a nofail mount, so this stage can be proven before anything
-  # depends on it. Widen to ./services.nix once the prerequisites listed at the
-  # bottom of this file are met.
-  imports = [ ./disko.nix ./storage.nix ];
+  # PHASE 5, stage 2: the array, sops-nix, and tsidp. NOT ./immich.nix yet —
+  # it needs an OIDC client ID that only a running tsidp can issue, so it lands
+  # in stage 4. Widen to ./services.nix (all four) then. The staging rationale
+  # and the full runbook are the header of ./services.nix.
+  imports = [ ./disko.nix ./storage.nix ./secrets.nix ./identity.nix ];
 
   networking.hostName = "hong-kong";
 
@@ -37,32 +37,18 @@
   ];
   boot.kernelModules = [ "kvm-intel" ];
 
-  # ---- PHASE 5: workloads ---------------------------------------------------
-  # Immich on the 7 TB array, tsidp for OIDC, and the tailscale serve front
-  # door. All written and reviewed in ./services.nix and the four files it
-  # imports, but NOT WIRED IN HERE YET, because the later stages cannot
-  # evaluate until out-of-band state exists that no commit can carry:
+  # ---- PHASE 5: what is still not wired in --------------------------------
+  # ./immich.nix is written and reviewed but not imported. It cannot be until
+  # tsidp has issued an OIDC client ID and secret, which requires tsidp to be
+  # running first — stages 3 and 4 of the runbook in ./services.nix.
   #
-  #   * secrets/hong-kong.yaml must exist and be encrypted to this host's age
-  #     key — sops.defaultSopsFile is a path, so eval fails without it.
-  #   * flake.nix's sops-nix input and module must be uncommented and
-  #     `nix flake lock` run, or comin cannot deploy at all (operating rule 1).
-  #   * immich.nix needs a client ID that only a running tsidp can issue.
-  #
-  # None of that is true of the disk, though. ./storage.nix is a bare
-  # fileSystems entry with no users, services or secrets, its UUID is already
-  # filled in, and it is the piece whose failure mode most needs rehearsing —
-  # so it goes first, on its own:
-  #
-  #     imports = [ ./disko.nix ./storage.nix ];
-  #
-  # then widen to the full set once the later prerequisites are met:
+  # When it lands, replace the imports above with:
   #
   #     imports = [ ./disko.nix ./services.nix ];
   #
-  # Left disabled rather than gated on builtins.pathExists, so that a missing
-  # prerequisite is loud rather than a silent non-deployment. The stage-by-stage
-  # runbook — including why tsidp has to be deployed before Immich can be
-  # configured, and how to try a stage without touching `main` — is the header
-  # of ./services.nix.
+  # which is exactly the same four files, via the aggregator.
+  #
+  # Note ./immich.nix asserts at eval time that a filesystem is declared at its
+  # mediaLocation's parent, so it cannot be imported without ./storage.nix and
+  # quietly build a photo library on the root SSD.
 }

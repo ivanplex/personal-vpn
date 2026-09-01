@@ -1,8 +1,8 @@
-# .sops.yaml — PHASE 3. Template; not usable until the machines exist.
+# .sops.yaml — PHASE 3b. Live for hong-kong; shanghai is still a placeholder.
 #
 # Each host decrypts with an age key derived from its own SSH host key, so
-# there is nothing to copy onto a machine and nothing to lose. Get the
-# recipients after installing, with:
+# there is nothing to copy onto a machine and nothing to lose. Re-derive a
+# host recipient at any time with:
 #
 #   nix-shell -p ssh-to-age --run \
 #     'ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub'
@@ -13,9 +13,16 @@
 # not the fleet: a password manager, a printed copy, anywhere but these two
 # machines.
 
+# These two MUST be different keys. If offline and host_hk are ever the same
+# value, the offline recipient is decorative: losing hong-kong's host key then
+# loses every secret in this repo permanently.
 keys:
-  - &offline    age1REPLACE_ME_WITH_YOUR_OFFLINE_KEY
-  - &host_hk    age1REPLACE_ME_AFTER_INSTALLING_HONG_KONG
+  # ~/Library/Application Support/sops/age/keys.txt on the MacBook, and a copy
+  # in the password manager. Never on the fleet.
+  - &offline    age19grl7zhufmutu7z8vr24wjh3e04x8u9mucnv9nnsnudjqac0rumsgug35n
+  # Derived from hong-kong's /etc/ssh/ssh_host_ed25519_key.pub.
+  - &host_hk    age1a8np7jngjlwv88993pss3ym903mpktfcjdcjvcsyqf9k62al0aksud660s
+  # shanghai has no secrets file, so this rule is never evaluated.
   - &host_sh    age1REPLACE_ME_AFTER_INSTALLING_SHANGHAI
 
 creation_rules:

@@ -37,6 +37,18 @@
 #     which never touches the bootloader — a reboot returns you to whatever
 #     `main` last gave you. This is the intended safety valve (operating rule 3).
 #
+#     GOTCHA, learned 2026-09-01: comin SILENTLY SKIPS the testing branch unless
+#     the main branch commit is an ANCESTOR of it. See hasNotBeenHardReset() in
+#     comin's internal/repository/git.go — it is called for the testing branch
+#     with main's commit id, so a diverged testing branch fails with "this
+#     branch has been hard reset" and is logged only at debug level. Merging a
+#     PR to `main` always causes this divergence, whichever merge style you use.
+#     So after EVERY merge to main:
+#
+#         git fetch origin && git rebase origin/main && git push --force-with-lease
+#
+#     The symptom is comin doing nothing at all while `fleet-status` looks fine.
+#
 #   * No commit at all: on the box, in tmux (operating rule 5), from a checkout
 #         git add -A && nixos-rebuild test --flake .#hong-kong
 #     `git add` is enough — Nix only sees what git tracks, but it reads the
