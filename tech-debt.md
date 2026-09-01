@@ -107,6 +107,43 @@ which has no `/mnt/storage` at all — it would "pass" while testing nothing.
 
 ---
 
+## 🔴 comin silently skips a diverged testing branch (confirmed 2026-09-01)
+
+`internal/repository/repository.go` passes the **main** branch's commit id in
+when resolving the testing branch, and `hasNotBeenHardReset()` in
+`internal/repository/git.go` then requires it to be an ancestor of the testing
+head:
+
+```go
+ok, err := isAncestor(r.Repository, *currentMainHash, *remoteMainHead)
+if !ok {
+    return fmt.Errorf("this branch has been hard reset: its head '%s' is not on top of '%s'", ...)
+}
+```
+
+**Merging any PR into `main` creates exactly that divergence**, whichever merge
+style is used, because `main` gains a commit the testing branch does not have.
+
+The failure is logged at **debug level only** —
+`logrus.Debugf("Failed to getHeadFromRemoteAndBranch: %s", err)` — so at the
+default log level the symptom is comin doing *nothing at all*: no error, no
+deployment, and `fleet-status` reporting perfect health. Same class as operating
+rule 10 (an expired token means silent non-deployment).
+
+Fix, now recorded in the `hosts/hong-kong/services.nix` runbook. After **every**
+merge to main:
+
+```
+git fetch origin && git rebase origin/main && git push --force-with-lease
+```
+
+- [ ] Worth raising the comin log level, or adding a `fleet-status` line that
+      shows the selected branch and commit, so this is visible rather than
+      inferred. Right now nothing on the box tells you the testing branch was
+      rejected.
+
+---
+
 ## Where PHASE 5 actually stands
 
 Immich, tsidp and the 7 TB array are written across `hosts/hong-kong/`:
@@ -116,12 +153,16 @@ is imported by `hosts/hong-kong/default.nix` today.
 
 ### ⚠️ Live state you will forget
 
-- [ ] **The mount is deployed with `test`, not `switch`.** It came from branch
-      `testing-hong-kong` (`b605cea`), which comin applies without touching the
-      bootloader. **A reboot right now loses the mount entirely.** Nothing
-      depends on it yet, so that is harmless — but do not mistake the current
-      working state for a persistent one. It becomes real when the PR merges
-      to `main`.
+- [x] Stage 1 (the mount) is on `main` (`8c9279e`) and persistent.
+- [ ] **Stage 2 (sops-nix + tsidp) is on `testing-hong-kong` (`80702fc`),
+      applied with `test`.** comin does not touch the bootloader for the testing
+      branch, so **a reboot drops back to stage 1** — no sops, no tsidp. That is
+      the intended safety valve, not a bug, but do not mistake a working tsidp
+      for a persistent one. It becomes real when the PR merges to `main`.
+- [ ] **The stage 2 deploy has not been verified.** Everything checked before
+      the rebase was still generation 2's config — see the divergence finding
+      below. This is the first real evaluation of `flake.nix` with sops-nix,
+      `secrets.nix` and `identity.nix`.
 
 ### Stage 1 — the disk
 
@@ -132,7 +173,7 @@ is imported by `hosts/hong-kong/default.nix` today.
       exercised — see the hypotheses list.
 - [x] Runtime removal: `umount` while running left tailscale and sshd
       untouched; `systemctl start mnt-storage.mount` brought it straight back.
-- [ ] PR `testing-hong-kong` → `main`, green CI, merge. Until then, see above.
+- [x] PR `testing-hong-kong` → `main`, green CI, merged as `8c9279e`.
 - [ ] Reboot with the disk **present**, from `main`. First real exercise of
       gates 3 and 4 on this box.
 - [ ] `sudo tune2fs -c 0 -i 0 /dev/sda1` — stop mount-count and time-based
@@ -147,18 +188,24 @@ is imported by `hosts/hong-kong/default.nix` today.
 
 ### Stage 2 — sops and tsidp
 
-- [ ] Age keys: host key via `ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub`,
-      plus an **offline** `age-keygen` key stored away from the fleet. Without
-      the offline key, a regenerated host key means the secrets are gone.
-- [ ] Replace the two `age1REPLACE_ME_*` placeholders in `.sops.yaml`
-      (hong-kong and offline). The shanghai rule stays a placeholder — no
-      `secrets/shanghai.yaml` is created, so it is never evaluated.
-- [ ] Create `secrets/hong-kong.yaml` with `tsidp-env`.
-- [ ] Uncomment the sops-nix input **and** module in `flake.nix`, run
-      `nix flake lock`, commit `flake.lock` (operating rule 1).
-- [ ] Tailscale auth key: reusable, non-ephemeral, pre-approved, tagged
-      `tag:container`. Tagged matters — tagged devices do not expire, and a
-      node key lapsing in 180 days on an unreachable box is a time bomb.
+- [x] Age keys generated: hong-kong's `age1a8np7j…` and an offline
+      `age19grl7z…` at `~/Library/Application Support/sops/age/keys.txt`.
+      **NOTE:** both slots in `.sops.yaml` initially held the host key; caught
+      and fixed. Both distinct recipients are confirmed on
+      `secrets/hong-kong.yaml`. Confirm the offline private key is in the
+      password manager — that is the only copy off the fleet.
+- [x] `.sops.yaml` recipients filled in. The shanghai rule stays a
+      placeholder — no `secrets/shanghai.yaml` exists, so it is never evaluated.
+- [x] `secrets/hong-kong.yaml` created with `tsidp-env`, encrypted to both
+      recipients.
+- [x] sops-nix input and module live in `flake.nix`; `flake.lock` regenerated
+      **on hong-kong** (no nix on the MacBook) and committed — sops-nix pinned
+      at `a8627b2`.
+- [x] Tailscale auth key created and encrypted into `tsidp-env`.
+      **Unverified from here:** that it is reusable, non-ephemeral,
+      pre-approved and tagged `tag:container`. Tagged matters — tagged devices
+      do not expire, and a node key lapsing in 180 days on an unreachable box
+      is a time bomb. Confirm on the node once it registers.
 - [ ] Confirm the `idp` node registers, carries the tag, and shows expiry
       disabled.
 - [ ] Confirm HTTPS certificates and MagicDNS are enabled on the tailnet.
