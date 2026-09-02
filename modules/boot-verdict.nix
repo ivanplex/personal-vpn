@@ -88,54 +88,142 @@ let
   promotedFile = "${stateDir}/promoted";   # survives reboots
   failFile = "/run/boot-verdict.fails";    # resets every boot
 
-  # Generation numbers live in the names of these symlinks:
-  #   /nix/var/nix/profiles/system-42-link -> /nix/store/...
-  # and generation 42's boot entry is nixos-generation-42.conf
+  # ---------------------------------------------------------------------------
+  # A GENERATION IS A (PROFILE, NUMBER) PAIR, NOT A NUMBER.
+  #
+  # Two profiles deploy to this machine, and their counters are INDEPENDENT:
+  #
+  #   default   /nix/var/nix/profiles/system-N-link
+  #             -> boot entry  nixos-generation-N.conf
+  #             written by a hand-run `nixos-rebuild`
+  #
+  #   comin     /nix/var/nix/profiles/system-profiles/comin-N-link
+  #             -> boot entry  nixos-comin-generation-N.conf
+  #             written by comin, which hardcodes both names in
+  #             internal/profile/profile.go and offers no option to change them
+  #
+  # The first version of this file knew only about the default profile. Once
+  # comin took over deploying, `booted_generation` matched nothing: gate 3
+  # short-circuited on "already running the latest generation" and never armed
+  # anything, and gate 4 printed "cannot identify the running generation" and
+  # exited 0 — for days, while `fleet-status` reported perfect health.
+  # Both failed SAFELY, which is precisely why nobody noticed.
+  # Confirmed on the box 2026-09-01; see tech-debt.md.
+  #
+  # Generations are passed around as a TOKEN — "system:6" or "comin:3" — and
+  # the helpers below are the ONLY place that knows how a token maps to a
+  # symlink and to a boot entry name.
+  #
+  # ORDERING IS BY TIME, NOT BY NUMBER. "comin-3" and "system-6" say nothing
+  # about which came first, so `latest_generation` and `previous_generation`
+  # order by the mtime of the profile symlink — when the generation was
+  # actually installed. It is the only ordering that means anything across two
+  # counters, and it is what makes a rollback land on the thing that really
+  # ran before this one.
   genHelpers = ''
     export PATH=${binPath}:$PATH
     profiles=/nix/var/nix/profiles
+    cominProfiles=/nix/var/nix/profiles/system-profiles
+    espEntries=/boot/loader/entries
 
-    # Pull "42" out of ".../system-42-link". Shell builtins only — see the
-    # awk lesson at the top of this file.
-    _gen_num() {
-      local n=''${1##*system-}
-      n=''${n%-link}
-      case "$n" in
-        ""|*[!0-9]*) return 1 ;;
+    # token -> the profile symlink pointing at its toplevel
+    _gen_link() {
+      case "$1" in
+        system:*) printf '%s' "$profiles/system-''${1#system:}-link" ;;
+        comin:*)  printf '%s' "$cominProfiles/comin-''${1#comin:}-link" ;;
+        *) return 1 ;;
       esac
-      printf '%s' "$n"
+    }
+
+    # token -> the systemd-boot entry that boots it
+    _gen_entry() {
+      case "$1" in
+        system:*) printf 'nixos-generation-%s.conf' "''${1#system:}" ;;
+        comin:*)  printf 'nixos-comin-generation-%s.conf' "''${1#comin:}" ;;
+        *) return 1 ;;
+      esac
+    }
+
+    # Can this generation actually be booted? configurationLimit keeps only
+    # the last 10 entries on the ESP, so a profile link outlives the entry
+    # that boots it. Rolling back to a generation with no entry is a one-way
+    # trip, so previous_generation() will not choose one.
+    _gen_bootable() {
+      local e
+      e=$(_gen_entry "$1") || return 1
+      [ -e "$espEntries/$e" ]
+    }
+
+    # Every installed generation, one token per line, both profiles. If comin
+    # has never deployed here the second glob simply matches nothing.
+    all_generations() {
+      local link n
+      for link in "$profiles"/system-*-link; do
+        [ -L "$link" ] || continue
+        n=''${link##*/system-}; n=''${n%-link}
+        case "$n" in ""|*[!0-9]*) continue ;; esac
+        printf 'system:%s\n' "$n"
+      done
+      for link in "$cominProfiles"/comin-*-link; do
+        [ -L "$link" ] || continue
+        n=''${link##*/comin-}; n=''${n%-link}
+        case "$n" in ""|*[!0-9]*) continue ;; esac
+        printf 'comin:%s\n' "$n"
+      done
+    }
+
+    # When was this generation installed? The mtime of the symlink ITSELF —
+    # stat does not follow symlinks unless asked, which is what we want here.
+    _gen_mtime() {
+      local link t
+      link=$(_gen_link "$1") || return 1
+      t=$(stat -c %Y "$link" 2>/dev/null) || return 1
+      case "$t" in ""|*[!0-9]*) return 1 ;; esac
+      printf '%s' "$t"
     }
 
     # Which generation are we actually RUNNING right now?
     booted_generation() {
-      local booted target link
+      local booted target tok
       booted=$(readlink -f /run/booted-system 2>/dev/null) || return 1
       [ -n "$booted" ] || return 1
-      for link in "$profiles"/system-*-link; do
-        target=$(readlink -f "$link" 2>/dev/null) || continue
+      for tok in $(all_generations); do
+        target=$(readlink -f "$(_gen_link "$tok")" 2>/dev/null) || continue
         if [ "$target" = "$booted" ]; then
-          _gen_num "$link" && return 0
+          printf '%s' "$tok"
+          return 0
         fi
       done
       return 1
     }
 
-    # Which generation is the newest one installed?
+    # The most recently installed generation, across both profiles.
     latest_generation() {
-      local t
-      t=$(readlink "$profiles/system" 2>/dev/null) || return 1
-      _gen_num "$t"
+      local tok t best="" bestt=""
+      for tok in $(all_generations); do
+        t=$(_gen_mtime "$tok") || continue
+        if [ -z "$best" ] || [ "$t" -gt "$bestt" ]; then
+          best=$tok
+          bestt=$t
+        fi
+      done
+      [ -n "$best" ] || return 1
+      printf '%s' "$best"
     }
 
-    # The highest generation strictly below $1 — our rollback target.
+    # The newest BOOTABLE generation installed strictly before $1 — i.e. the
+    # rollback target.
     previous_generation() {
-      local current=$1 best="" n link
-      for link in "$profiles"/system-*-link; do
-        n=$(_gen_num "$link") || continue
-        if [ "$n" -lt "$current" ]; then
-          if [ -z "$best" ] || [ "$n" -gt "$best" ]; then
-            best=$n
-          fi
+      local cur=$1 curt tok t best="" bestt=""
+      curt=$(_gen_mtime "$cur") || return 1
+      for tok in $(all_generations); do
+        if [ "$tok" = "$cur" ]; then continue; fi
+        _gen_bootable "$tok" || continue
+        t=$(_gen_mtime "$tok") || continue
+        [ "$t" -lt "$curt" ] || continue
+        if [ -z "$best" ] || [ "$t" -gt "$bestt" ]; then
+          best=$tok
+          bestt=$t
         fi
       done
       [ -n "$best" ] || return 1
@@ -171,9 +259,9 @@ let
     fi
 
     echo "boot-arm: default stays on known-good $booted; $latest gets one try"
-    ${bootctl} set-default "nixos-generation-$booted.conf" \
+    ${bootctl} set-default "$(_gen_entry "$booted")" \
       || echo "boot-arm: WARNING could not set default"
-    ${bootctl} set-oneshot "nixos-generation-$latest.conf" \
+    ${bootctl} set-oneshot "$(_gen_entry "$latest")" \
       || echo "boot-arm: WARNING could not set oneshot"
     exit 0
   '';
@@ -256,7 +344,7 @@ let
       echo 0 > ${failFile}
       if [ "$promoted" != "$booted" ]; then
         note "healthy — promoting generation $booted to permanent default"
-        if ${bootctl} set-default "nixos-generation-$booted.conf"; then
+        if ${bootctl} set-default "$(_gen_entry "$booted")"; then
           mkdir -p ${stateDir} && echo "$booted" > ${promotedFile}
         else
           note "WARNING could not promote; will retry at the next check"
@@ -303,9 +391,9 @@ let
     # would overwrite the default, so set it afterwards, immediately before
     # rebooting. The system profile pointer is deliberately left alone so you
     # can still see which generation was attempted.
-    "$profiles/system-$target-link/bin/switch-to-configuration" boot \
+    "$(_gen_link "$target")/bin/switch-to-configuration" boot \
       || note "WARNING switch-to-configuration failed; rebooting anyway"
-    ${bootctl} set-default "nixos-generation-$target.conf" \
+    ${bootctl} set-default "$(_gen_entry "$target")" \
       || note "WARNING could not set default to $target"
 
     ${pkgs.systemd}/bin/systemctl reboot
@@ -334,8 +422,34 @@ let
     booted=$(booted_generation) || booted="?"
     latest=$(latest_generation) || latest="?"
     promoted=$(cat ${promotedFile} 2>/dev/null || echo "never")
-    default=$(efivar LoaderEntryDefault || echo "(unset — loader.conf decides)")
-    oneshot=$(efivar LoaderEntryOneShot || echo "(none)")
+    defaultRaw=$(efivar LoaderEntryDefault || echo "")
+    oneshot=$(efivar LoaderEntryOneShot || echo "")
+
+    # loader.conf is the LOWEST-priority of the three, and on this box since
+    # 2026-09-01 it is the one actually in charge: the interim fix for the
+    # comin profile bug unset LoaderEntryDefault so NixOS's own
+    # "default nixos-comin-generation-N.conf" line would govern. Printing it
+    # is the difference between knowing what boots next and guessing. Gate 4
+    # sets LoaderEntryDefault again the first time it promotes, which takes
+    # the fallback back off loader.conf and under this module's control.
+    loaderconf=""
+    if [ -r /boot/loader/loader.conf ]; then
+      while read -r k v; do
+        if [ "$k" = "default" ]; then loaderconf=$v; fi
+      done < /boot/loader/loader.conf
+    fi
+
+    # The whole point of this command: resolve the three sources in
+    # systemd-boot's own precedence order and say what will actually happen.
+    if [ -n "$oneshot" ]; then
+      nextboot="$oneshot  (one-shot, consumed on use)"
+    elif [ -n "$defaultRaw" ]; then
+      nextboot="$defaultRaw  (EFI LoaderEntryDefault)"
+    elif [ -n "$loaderconf" ]; then
+      nextboot="$loaderconf  (loader.conf)"
+    else
+      nextboot="(cannot tell)"
+    fi
 
     echo
     echo "  $(hostname)"
@@ -350,8 +464,10 @@ let
     echo "    promoted      $promoted"
     echo
     echo "  bootloader   (one-shot beats default beats loader.conf)"
-    echo "    one-shot      $oneshot"
-    echo "    default       $default"
+    echo "    one-shot      ''${oneshot:-(none)}"
+    echo "    default       ''${defaultRaw:-(unset)}"
+    echo "    loader.conf   ''${loaderconf:-(not set)}"
+    echo "    boots next    $nextboot"
     echo
     echo "  health"
     printf '    tailscale     %s\n' \
