@@ -6,6 +6,147 @@ this holds what *happened*.
 
 ---
 
+## 2026-09-02 — Direct access, at last: the disk drill, and the gates stop being a hypothesis
+
+The machine was physically reachable for the first time since it was deployed.
+That is the scarce resource, so the day was spent on the things that **cannot**
+be done over SSH, and the SSH-only backlog was deliberately left alone.
+
+Two results, and both were overdue: **`nofail` at boot is proven**, and
+**gates 3 and 4 work**.
+
+### Step 0 first: prove the escape hatch before relying on it
+
+`modules/base.nix` sets `editor = false`, so the boot menu offers a choice
+between at most ten generations and nothing else — no cmdline editing, no
+rescue shell. Worth knowing *before* the day you need it, along with whether
+the display shows anything during the firmware's five seconds and whether the
+keyboard registers before the kernel's USB driver exists. Both were fine.
+
+### The unplug drill — `nofail` finally exercised
+
+Run against stage 1, which is what `main` booted, so it tested one variable
+rather than three.
+
+| | result |
+|---|---|
+| unplug while running | `mnt-storage.mount` → `inactive (dead)` via a clean `Deactivated successfully`; tailscale, sshd, DNS all ok, 0 failed units |
+| reboot with it absent | box came back; slowest unit was `dhcpcd` at 10 s and the mount was nowhere near the top of `systemd-analyze blame` |
+| replug and reboot | mount returns |
+
+The middle row is the one that matters. `nofail` was inspected at the generator
+level a day earlier and written up as "inspected, not exercised". It is now
+exercised.
+
+**And the drill found the thing drills are for.** The array does **not**
+remount itself when the enclosure comes back. With the disk absent the mount
+job gives up after `x-systemd.device-timeout=30s` — `systemctl list-jobs` goes
+empty — so when the device reappears there is nothing queued to notice.
+Confirmed directly: `lsblk -f` showed the array back with the right UUID and an
+empty `MOUNTPOINTS` until `systemctl start mnt-storage.mount` was run by hand.
+
+That is the *realistic* failure. Nobody unplugs a 7 TB enclosure on purpose;
+enclosures brown out for twenty seconds and return. And nothing pages anybody
+when it happens — the filesystem series simply stops existing, which is silence
+rather than an alarm.
+
+### boot-verdict rewritten, and the gates ran end to end
+
+The diagnosis was already in `tech-debt.md` from the day before: comin deploys
+into `/nix/var/nix/profiles/system-profiles/comin`, every guard in this repo
+read `/nix/var/nix/profiles/system`, so gate 3 never armed and gate 4 exited 0
+with "cannot identify the running generation".
+
+The rewrite makes a generation a **token** — `comin:3` or `system:6` — with
+`_gen_link` and `_gen_entry` the only code that knows how one maps to a symlink
+and a boot entry name. The part that took the actual thinking:
+
+**Ordering is by time, not by number.** The two profiles have independent
+counters, so `comin-3` and `system-6` say nothing about which came first, and
+"the previous generation" — the rollback target — is only meaningful
+chronologically. It is now the mtime of the profile symlink. `previous_generation`
+also refuses any generation whose ESP entry has aged out under
+`configurationLimit = 10`; rolling back to one of those would have been a
+one-way trip, and the old code would happily have done it.
+
+No nix on the MacBook, so the helpers were extracted from the Nix string,
+unescaped, and run against a fake profile tree with a deliberately mixed
+history — five generations across both profiles, interleaved in time, with one
+comin entry missing from the ESP. Twelve assertions, including that the
+rollback target skips the unbootable generation and crosses profiles correctly.
+Cheap, and it caught the shape of the problem before the box did.
+
+Then, on the machine, in order:
+
+```
+promoted comin:2                         gate 4, for the first time ever
+one-shot nixos-comin-generation-3.conf   gate 3, arming, default held at comin-2
+booted comin:3 / boots next comin:2      running the new one, still pointing home
+healthy — promoting generation comin:3   T+10, and all three sources agree
+```
+
+That third line is the whole design in one row: **running generation 3, would
+fall back to generation 2 if power-cycled.** A generation genuinely on trial.
+
+The merge to `main` therefore happened *with* the safety net rather than
+without it, which reverses the ordering the previous session had planned. It
+also makes Immich, tsidp, Grafana and Prometheus persistent — before today they
+were a `test` activation that evaporated on every reboot.
+
+**The interim `bootctl set-default ""` workaround is superseded.** Gate 4 sets
+`LoaderEntryDefault` on every promotion now.
+
+### A status command that could not see, and did not say so
+
+`fleet-status` kept printing `booted ?` after the fix, while the root-run
+service was resolving `comin:2` perfectly. The cause: comin creates
+`/nix/var/nix/profiles/system-profiles` as `d---------`, mode 0000, and the ESP
+is mounted `umask=0077` by `disko.nix`. As a normal user the glob matched
+nothing, so it reported `booted ?` and — worse — a confident
+`latest system:6`, which is the newest *hand-run* generation and was not the
+truth.
+
+**This is the same failure as the original bug wearing different clothes: a
+reassuring answer produced by a script that was not allowed to look.** The fix
+is not to loosen the permissions — the ESP's `umask=0077` is deliberate — but
+to say so:
+
+```
+!! CANNOT READ the comin profile directory and the ESP — run: sudo fleet-status
+   the generations below are INCOMPLETE, not authoritative.
+```
+
+A tool that reports what it can see, without reporting what it *couldn't*, is
+worse than no tool. That is twice in two days on this one file.
+
+### Not done, and why
+
+- **Gate 4's rollback path.** Still never fired, and it is the half that
+  matters — a generation that boots, fails its checks, and gets thrown away.
+  The recipe is in `tech-debt.md` and needs no broken commit: remove
+  `/var/lib/boot-verdict/promoted`, stop `tailscaled`, wait 30 minutes.
+  **Deferred: no monitor was plugged into the machine.** The drill deliberately
+  breaks the only way in, so it needs a screen in the room, not merely a body
+  in the building.
+- Everything on the SSH-only list — Immich password login, promoting the OAuth
+  account to admin, the nightly `pg_dump`, the `tailscaled-grafana` logpolicy
+  check, the node_exporter flags. Deliberately untouched: none of them needed
+  the access, and the access was the scarce thing.
+
+### Next
+
+1. **The rollback drill**, next time there is a screen. It is now the largest
+   unproven thing in the repo.
+2. **Make the array recover on its own** — a `.path` unit or a periodic
+   `systemctl start mnt-storage.mount`, plus an alert for the filesystem series
+   going absent. `x-systemd.automount` remains ruled out: it would make
+   `AssertPathIsMountPoint` a no-op.
+3. The SSH-only backlog, from anywhere.
+4. The tailnet migration, which is the only item with somebody else's clock on
+   it. See `tailnet-migration.md` on its branch.
+
+---
+
 ## 2026-09-01 — Monitoring: Prometheus, Grafana, and 22 rules nobody has seen fire
 
 Goal: architecture.md's step 10, finally. Prometheus and Grafana on hong-kong,

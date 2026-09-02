@@ -1,6 +1,6 @@
 # Tech debt and unproven claims
 
-Last updated: 2026-09-01.
+Last updated: 2026-09-02.
 
 Two lists. The first is work that is written but not finished. The second is
 the more important one: **guards that exist in code but have never fired.**
@@ -12,7 +12,40 @@ architecture.md:116 is the standard this repo holds itself to —
 
 ---
 
-## 🔴 Gates 3 and 4 do not work with comin (confirmed 2026-09-01)
+## ✅ Gates 3 and 4 work with comin (fixed and PROVEN 2026-09-02)
+
+> **Resolved on the box, with a console in the room.** `boot-verdict.nix` now
+> understands both profiles, and the whole cycle — arm, boot on trial, judge,
+> promote — ran end to end for the first time since this repo was written.
+> The diagnosis below is kept because it is the most instructive failure this
+> fleet has produced: **both guards failed SAFELY, which is exactly why nobody
+> noticed for days.**
+>
+> What changed: a generation is now a `(profile, number)` TOKEN — `comin:3` or
+> `system:6` — and `_gen_link` / `_gen_entry` are the only code that knows how
+> one maps to a symlink and a boot entry. **Ordering is by the mtime of the
+> profile symlink, not by number**, because the two counters are independent
+> and `comin-3` vs `system-6` says nothing about which came first.
+> `previous_generation` additionally refuses any generation whose ESP entry has
+> aged out under `configurationLimit = 10` — rolling back to one would have
+> been a one-way trip.
+>
+> Observed 2026-09-02, in order: `promoted comin:2` and the EFI default set for
+> the first time; then on merging to `main`, `one-shot
+> nixos-comin-generation-3.conf` with `default` held at `comin-2`; then a
+> reboot onto `comin:3` with `boots next` still resolving to `comin:2` — the
+> generation genuinely on trial; then at T+10 `healthy — promoting generation
+> comin:3`, with all three bootloader sources agreeing afterwards.
+>
+> **The interim `bootctl set-default ""` workaround is now superseded.** Gate 4
+> sets `LoaderEntryDefault` again on every promotion, so the fallback is back
+> under this module's control rather than delegated to `loader.conf`.
+>
+> **STILL UNPROVEN: the rollback path.** Everything above is the happy path. A
+> generation that boots but fails its health checks, and is therefore thrown
+> away, has never been exercised — see the hypotheses list.
+
+### The original diagnosis (confirmed 2026-09-01)
 
 **comin deploys into its own Nix profile. Every safety mechanism in this repo
 reads a different one.** Nothing here is theoretical — it was confirmed on the
@@ -48,17 +81,17 @@ comin never advances. (`system-profiles/` is not matched by that glob: no
 
 ### Consequences
 
-- [ ] **Every comin deployment is effectively `test`.** The EFI default points
+- [x] **Every comin deployment is effectively `test`.** The EFI default points
       at the last hand-run generation, so a reboot — planned, watchdog, or power
       cut — silently reverts to the Aug 31 config.
-- [ ] **Gate 3 never arms anything.** `booted` and `latest` both resolve to 6
+- [x] **Gate 3 never arms anything.** `booted` and `latest` both resolve to 6
       from the stale profile, so `armScript` short-circuits on
       `"already running the latest generation"`.
-- [ ] **Gate 4 is inert the moment the box boots a comin generation.**
+- [x] **Gate 4 is inert the moment the box boots a comin generation.**
       `booted_generation()` finds no match, and `verdictScript` prints
       `"cannot identify the running generation; taking no action"` and exits 0.
       No promotion, no rollback.
-- [ ] **`fleet-status` reports the wrong profile**, which is why this looked
+- [x] **`fleet-status` reports the wrong profile**, which is why this looked
       healthy for days: a reassuring `booted 6 / latest 6 / promoted 6` while
       comin had deployed something it cannot see.
 
@@ -86,7 +119,12 @@ Interim options, both verified:
   is gate 3's one-shot semantics done by hand, and is the safe way to test a
   comin generation on a machine nobody can power-cycle.
 
-### Decision, 2026-09-01
+### Decision, 2026-09-01 — SUPERSEDED 2026-09-02
+
+Everything below was true for one day. The rewrite landed on 2026-09-02 and gate
+4 now sets `LoaderEntryDefault` on every promotion, so the fallback is under this
+module's control again and the "no automatic fallback" warning no longer applies.
+Kept because the reasoning for accepting that risk for a day is worth having.
 
 Interim fix **applied**: `LoaderEntryDefault` unset, so `loader.conf` governs and
 NixOS keeps it pointing at the newest comin generation. The proper
@@ -99,11 +137,10 @@ and this machine is headless. Until boot-verdict understands the comin profile,
 **the first boot of any materially new generation should happen while somebody
 can see a console.**
 
-### Knock-on: the drill
+### Knock-on: the drill — DONE 2026-09-02
 
-Tonight's physical unplug drill must boot a generation that actually contains
-the mount. Booting the current EFI default would boot the Aug 31 generation,
-which has no `/mnt/storage` at all — it would "pass" while testing nothing.
+The unplug drill ran against stage 1 as planned, one variable rather than three.
+See Stage 1 below.
 
 ---
 
@@ -155,14 +192,14 @@ is imported by `hosts/hong-kong/default.nix` today.
 
 - [x] Stage 1 (the mount) is on `main` (`8c9279e`) and persistent.
 - [x] Stage 2 verified: sops decrypts, `tsidp` is active, the issuer resolves.
-- [ ] **Stages 2–4 are ALL on `testing-hong-kong` (`0a8b4ac`), applied with
-      `test`.** comin deployed it at 17:09 on 2026-09-01 and does not touch
-      the bootloader for the testing branch, so **a reboot still drops back to
-      stage 1** — no sops, no tsidp, no Immich. That is the intended safety
-      valve, not a bug, but do not mistake a working Immich for a persistent
-      one. It becomes real when this merges to `main`. Confirmed on the box:
-      `loader.conf` still says `default nixos-comin-generation-2.conf`, and
-      comin-2-link is the last `main` deploy from 10:52.
+- [x] **Stages 2–7(c) are on `main` and PERSISTENT as of 2026-09-02**
+      (`e296ddd`, deployed by comin as `comin:3`, promoted by gate 4 at
+      11:33). sops, tsidp, Immich and its tsnet node, Prometheus, Grafana and
+      its tsnet node all survive a reboot now. Before this they were a `test`
+      activation on `testing-hong-kong` and evaporated on every reboot.
+- [ ] **After that merge, `testing-hong-kong` must be rebased or comin silently
+      stops deploying it** — see the diverged-branch entry below.
+      `git fetch origin && git rebase origin/main && git push --force-with-lease`
 
 ### Stage 1 — the disk
 
@@ -174,17 +211,39 @@ is imported by `hosts/hong-kong/default.nix` today.
 - [x] Runtime removal: `umount` while running left tailscale and sshd
       untouched; `systemctl start mnt-storage.mount` brought it straight back.
 - [x] PR `testing-hong-kong` → `main`, green CI, merged as `8c9279e`.
-- [ ] Reboot with the disk **present**, from `main`. First real exercise of
-      gates 3 and 4 on this box.
-- [ ] `sudo tune2fs -c 0 -i 0 /dev/sda1` — stop mount-count and time-based
+- [x] Reboot with the disk **present**, from `main`. Done repeatedly on
+      2026-09-02; mount returns with `rw,nosuid,nodev,noatime,errors=remount-ro`.
+- [x] `sudo tune2fs -c 0 -i 0 /dev/sda1` — stop mount-count and time-based
       fsck. `systemd-fsck@` has an infinite `TimeoutSec`, so a forced full
       check on 7 TB can leave Immich down for an hour. `nofail` keeps it off
       the boot path either way. Does not touch data.
-- [ ] **Physical unplug drill — planned for the evening of 2026-09-01.**
-      Unplug the enclosure, reboot, confirm the box returns with tailscale
-      Running and `systemd-analyze blame | head` showing no stall; then replug
-      and reboot. This is the acceptance test for the entire feature and the
-      only one that cannot be done over SSH.
+- [x] **Physical unplug drill — DONE 2026-09-02, against stage 1.** All three
+      parts passed:
+      **(a)** Unplugged while running: `mnt-storage.mount` went
+      `inactive (dead)` via a clean `Deactivated successfully` — systemd's
+      implicit device binding tore it down rather than leaving it wedged — and
+      `fleet-status` still showed tailscale Running, sshd active, DNS ok,
+      0 failed units.
+      **(b)** Rebooted with the enclosure still absent: the box came back,
+      `mnt-storage.mount` nowhere near the top of `systemd-analyze blame`
+      (slowest was `dhcpcd` at 10 s), 0 failed units. **`nofail` at boot is
+      proven.**
+      **(c)** Replugged and rebooted: mount returns.
+- [ ] 🟠 **The array does NOT remount itself when the enclosure comes back.**
+      Found during (b)→(c). With the disk absent the mount job gives up after
+      `x-systemd.device-timeout=30s` and `systemctl list-jobs` goes empty — so
+      when the device reappears there is nothing queued to notice it.
+      Confirmed: `lsblk -f /dev/sda` showed the array back, correct UUID, and
+      `MOUNTPOINTS` empty until `systemctl start mnt-storage.mount` was run by
+      hand.
+      **This is the realistic failure.** An enclosure that browns out for
+      twenty seconds and returns leaves Immich broken until a human intervenes,
+      and nothing pages anybody: the filesystem series simply stops existing,
+      which is silence rather than an alarm. `x-systemd.automount` is the
+      obvious fix and is ruled out for good reasons in `storage.nix` — it would
+      make `AssertPathIsMountPoint` a no-op. A `.path` unit or a periodic timer
+      that runs `systemctl start mnt-storage.mount` is the shape that fits, plus
+      an alert on the filesystem series going absent.
 
 ### Stage 2 — sops and tsidp
 
@@ -476,7 +535,13 @@ Done for `hong-kong`; confirmed `No serve config` there and the immich node
 still serving. If a future front door moves again, remember this step or the
 old URL keeps working and you will not notice.
 
-#### Persistence: what a reboot costs right now
+#### Persistence: what a reboot costs right now — RESOLVED 2026-09-02
+
+Superseded by the merge to `main` (`e296ddd` = `comin:3`, promoted by gate 4).
+A reboot now returns the whole stack, not stage 1. The note below is kept
+because the reasoning — what is durable versus what is merely activated — is
+what made the merge safe to do.
+
 
 Verified on the box: `/run/booted-system` is `comin-1`, `/run/current-system`
 is the test activation (in no profile at all), and `/boot/loader/loader.conf`
@@ -493,13 +558,10 @@ persists it — it will just 502 until Immich is back.
 expected** — do the drill against stage 1 as planned, so it tests `nofail`
 with one variable and not three.
 
-- [ ] **Merging to `main` is the step that needs care, not this one.** That
-      makes Immich the boot generation, and with gate 4 inert and
-      `LoaderEntryDefault` unset there is no automatic fallback if it fails to
-      BOOT. The standing rule applies: the first boot of a materially new
-      generation happens with a console in reach. Tonight's drill is that
-      window — do the drill first, then merge, then reboot once while you can
-      still see the screen.
+- [x] **Merged to `main` on 2026-09-02**, with a console in the room and
+      — by then — a working gate 3 arming the one-shot, so the merge happened
+      with the safety net rather than without it. Boot was clean; gate 4
+      promoted `comin:3` ten minutes later.
 
 ---
 
@@ -508,8 +570,10 @@ with one variable and not three.
 Each of these is real code with a real reason. None has been observed doing
 its job on this machine.
 
-- [ ] **`nofail` at boot.** Inspected via `systemctl show`, never exercised
-      with the disk actually absent. The evening drill closes this.
+- [x] **`nofail` at boot — PROVEN 2026-09-02.** Rebooted with the enclosure
+      physically absent; the boot did not stall and the machine came back
+      healthy. See the drill under Stage 1. The gap it exposed instead is that
+      nothing remounts the array when it returns.
 - [ ] **`AssertPathIsMountPoint` on `immich-media-setup`.** The distinction
       from `ConditionPathIsMountPoint` is the whole guarantee — a failed
       *Condition* marks the job successful and lets `Requires=` dependents run.
@@ -529,8 +593,35 @@ its job on this machine.
 - [ ] **sops decryption failure.** Expected to leave `/run/secrets` empty,
       skip tsidp via `ConditionPathExists`, and fail `immich-server` — while
       tailscaled and sshd carry on. Never tested.
-- [ ] **Gate 3 and gate 4 on this box.** README.md:113 says to rehearse them
-      before the machines leave your desk. They left.
+- [x] **Gate 3, and gate 4's PROMOTE path — PROVEN 2026-09-02.** Arm, boot
+      on trial, judge healthy, promote, all observed end to end. See the
+      resolved entry at the top of this file.
+- [ ] 🔴 **Gate 4's ROLLBACK path — still never fired, and it is the half that
+      matters.** Everything proven on 2026-09-02 was the happy path. The code
+      that picks a rollback target, runs the old generation's
+      `switch-to-configuration boot`, sets the EFI default back and reboots was
+      rewritten that day and has never executed.
+      **Deferred 2026-09-02: no monitor was plugged into the machine**, and the
+      drill deliberately breaks tailscale, which is the only way in.
+      The recipe, which needs no broken commit and does not fight comin — comin
+      has nothing new to deploy, so it stays out of the way:
+
+          sudo rm /var/lib/boot-verdict/promoted   # forget that we trust this one
+          sudo systemctl stop tailscaled           # break it
+          journalctl -u boot-verdict -f
+
+      Together those are indistinguishable from having just booted a bad
+      generation. Expect `unhealthy — consecutive failed check 1 of 3`, then 2,
+      then `UNHEALTHY — rolling back to generation comin:N and rebooting`,
+      about 30 minutes in total. Afterwards comin heals forward on its own,
+      because `main` was never changed.
+      **Do it with a screen in the room.**
+- [ ] **Cross-profile rollback specifically.** `previous_generation` orders by
+      symlink mtime across both profiles and skips generations whose ESP entry
+      has aged out. That logic was unit-tested against a fake profile tree
+      (both cases pass) but has never run against the real one — and the real
+      tree currently has a `system:6` from 2026-08-31 sitting older than the
+      comin generations, which is exactly the mixed case it exists for.
 - [ ] **Every alert rule in `metrics.nix`.** 22 of them, none ever fired.
       promtool checks that each one parses (`checkConfig` runs at build time,
       so gate 1 catches a malformed rule) but nothing checks that it fires when
@@ -548,6 +639,18 @@ its job on this machine.
       so it is the first thing the kernel takes. Watch
       `systemctl status system-observability.slice` for a week before
       believing any of these numbers.
+- [ ] 🟠 **`fleet-status` is blind to two root-only paths, and now says so.**
+      Found 2026-09-02: `/nix/var/nix/profiles/system-profiles` is created by
+      comin as `d---------` (mode 0000), and the ESP is mounted `umask=0077`
+      per `disko.nix`. Run as a normal user, `fleet-status` therefore could not
+      see the comin profile at all and printed `booted ?` with a confident
+      `latest system:6` — **the same shape of failure as the original bug: a
+      reassuring answer from a script that could not look.** It now prints a
+      `CANNOT READ … run: sudo fleet-status` banner above the numbers instead.
+      Not fixed by loosening permissions: the ESP's `umask=0077` is deliberate
+      hardening, so root would still be required for the whole truth. The
+      honest banner is the fix. Worth revisiting only if `fleet-status` grows a
+      use that must work unprivileged.
 - [ ] **A third `tailscaled` next to the other two.** `frontdoor.nix`'s
       isolation was proven on 2026-09-01 by reading `logpolicy` out of the
       journal. `grafana-frontdoor.nix` copies the mechanism exactly, and the
