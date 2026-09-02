@@ -419,6 +419,26 @@ let
       return 1
     }
 
+    # HONESTY CHECK — do not skip this, it is the whole point of the command.
+    #
+    # Two things fleet-status reads are root-only, and NEITHER is a mistake:
+    #   /nix/var/nix/profiles/system-profiles   comin creates it mode 0000
+    #   /boot/loader/entries                    the ESP is mounted umask=0077
+    #
+    # Run as a normal user, the generation lines below are not WRONG, they are
+    # BLIND: the comin profile is invisible, so `booted` reads "?" and `latest`
+    # reports the newest hand-run generation as though nothing else existed.
+    # That is precisely the shape of the bug that hid the comin profile
+    # mismatch for days — a reassuring answer produced by a script that could
+    # not see. So say so, at the top, before any number is printed.
+    blind=""
+    if [ ! -r "$cominProfiles" ] || [ ! -x "$cominProfiles" ]; then
+      blind="the comin profile directory"
+    fi
+    if [ ! -r "$espEntries" ] || [ ! -x "$espEntries" ]; then
+      blind="''${blind:+$blind and }the ESP"
+    fi
+
     booted=$(booted_generation) || booted="?"
     latest=$(latest_generation) || latest="?"
     promoted=$(cat ${promotedFile} 2>/dev/null || echo "never")
@@ -454,6 +474,11 @@ let
     echo
     echo "  $(hostname)"
     echo
+    if [ -n "$blind" ]; then
+      echo "  !! CANNOT READ $blind — run: sudo fleet-status"
+      echo "     the generations below are INCOMPLETE, not authoritative."
+      echo
+    fi
     echo "  generations"
     echo "    booted        $booted"
     if [ "$latest" != "$booted" ]; then
