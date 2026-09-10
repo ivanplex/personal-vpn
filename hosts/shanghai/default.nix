@@ -1,12 +1,11 @@
 # hosts/shanghai — Shanghai.
 #
-# HARDWARE NOT YET CONFIRMED. Run the discovery commands from the runbook on
-# this machine and update the notes below before installing:
-#   lsblk -o NAME,SIZE,MODEL,TRAN
-#   ls /sys/firmware/efi >/dev/null && echo UEFI || echo BIOS
-#   lscpu | head -20
-#   free -h
-#   ip -br link
+# Hardware confirmed 2026-09-10 on the machine itself:
+#   Lenovo ThinkCentre M710q Tiny, 10MR0023UK, BIOS M1AKT24A (2017-07-25)
+#   UEFI (Secure Boot off) · i3-7100T Kaby Lake 2C/4T · 7.6 GiB
+#   Kingston SA400S37120G, 111.8 G, SATA — NO NVMe, both M.2 slots empty
+#   enp0s31f6, MAC 6c:4b:90:24:b9:13
+#   Intel 8265 wifi/BT at 01:00.0 — blacklisted below
 #
 # Duty: exit node only. Nothing else lives here — it is the hardest machine
 # to reach and the one with the least margin for surprises.
@@ -21,6 +20,16 @@
     "xhci_pci" "nvme" "ahci" "usb_storage" "sd_mod" "rtsx_pci_sdmmc"
   ];
   boot.kernelModules = [ "kvm-intel" ];
+
+  # Kaby Lake IGD loses the display at the i915 modeset on this box — the
+  # firmware console dies the instant the kernel takes over. Confirmed
+  # 2026-09-10 on real hardware; nomodeset restores it. Costs VAAPI, which
+  # this host does not need.
+  boot.kernelParams = [ "nomodeset" ];
+
+  # Intel 8265 wifi/BT at 01:00.0 — no firmware, unconfigured, unwanted.
+  # Attack surface on a hostile network with no upside.
+  boot.blacklistedKernelModules = [ "iwlwifi" "btusb" ];
 
   # ---- PHASE 3+: living behind the Great Firewall ---------------------------
   # GitHub is unreliable from the mainland and cache.nixos.org is slow, so
