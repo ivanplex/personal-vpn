@@ -20,7 +20,7 @@
       partitions = {
         # 1 GB rather than the usual 512 MB: each NixOS generation keeps a
         # kernel and initrd here, and a full ESP breaks the bootloader
-        # install, which breaks gate 3. Cheap insurance on a 238 GB disk.
+        # install, which breaks gate 3. Cheap insurance on a 112 GB disk.
         ESP = {
           priority = 1;
           name = "ESP";
