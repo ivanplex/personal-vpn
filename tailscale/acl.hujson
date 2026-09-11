@@ -28,7 +28,6 @@
       "src": [
         "autogroup:member",
         "tag:container",
-        "tag:permanent-exit-node"
       ],
       "dst": [
         "*:*", // any tailnet node, any port
