@@ -4,15 +4,27 @@
   // Who is allowed to apply each tag when authenticating a node.
   "tagOwners": {
     // Generic tag for containerized/headless nodes.
-    "tag:container": ["autogroup:admin"],
+    "tag:container": [
+      "autogroup:admin"
+    ],
     // Always-on exit node.
-    "tag:permanent-exit-node": ["autogroup:admin"],
+    "tag:permanent-exit-node": [
+      "autogroup:admin"
+    ],
     // Router used for Claude traffic.
-    "tag:claude-router": ["autogroup:admin"],
+    "tag:claude-router": [
+      "autogroup:admin"
+    ],
     // Taiwan app connector — advertises routes for Anthropic domains only.
-    "tag:tw-limited-trust": ["autogroup:admin"]
+    "tag:tw-limited-trust": [
+      "autogroup:admin"
+    ],
+    // Any computer placed in location, acting as both an exit node and perform
+    // computation, including running of docker containers.
+    "tag:local-compute": [
+      "autogroup:admin"
+    ]
   },
-
   // Access rules. Currently wide open within the tailnet.
   "acls": [
     {
@@ -27,23 +39,52 @@
         "*:*", // any tailnet node, any port
         "autogroup:internet:*" // exit-node traffic
       ]
+    },
+    {
+      "action": "accept",
+      "src": [
+        "autogroup:member"
+      ],
+      "dst": [
+        "tag:local-compute:*"
+      ]
     }
   ],
-
   // Tailscale SSH: members may SSH to their own devices, subject to a
   // periodic re-auth check.
   "ssh": [
     {
       "action": "check",
-      "src": ["autogroup:member"],
-      "dst": ["autogroup:self"],
-      "users": ["autogroup:nonroot", "root"]
-    }
+      "src": [
+        "autogroup:member"
+      ],
+      "dst": [
+        "autogroup:self"
+      ],
+      "users": [
+        "autogroup:nonroot",
+        "root"
+      ]
+    },
+    {
+      "action": "accept",
+      "src": [
+        "autogroup:admin"
+      ],
+      "dst": [
+        "tag:local-compute"
+      ],
+      "users": [
+        "ivan",
+        "root"
+      ],
+    },
   ],
-
   "nodeAttrs": [
     {
-      "target": ["*"],
+      "target": [
+        "*"
+      ],
       "app": {
         // App connector: route Claude/Anthropic domains through the
         // tag:tw-limited-trust node (Taiwan egress) instead of the
@@ -52,7 +93,9 @@
         "tailscale.com/app-connectors": [
           {
             "name": "claude-ai",
-            "connectors": ["tag:tw-limited-trust"],
+            "connectors": [
+              "tag:tw-limited-trust"
+            ],
             "domains": [
               "claude.ai",
               "*.claude.ai",
@@ -67,45 +110,63 @@
     },
     {
       // Allow members to expose services publicly via Tailscale Funnel.
-      "target": ["autogroup:member"],
-      "attr": ["funnel"]
+      "target": [
+        "autogroup:member"
+      ],
+      "attr": [
+        "funnel"
+      ]
     },
     {
       // Mullvad exit-node access for this specific device.
-      "target": ["100.85.174.62"],
-      "attr": ["mullvad"]
+      "target": [
+        "100.85.174.62"
+      ],
+      "attr": [
+        "mullvad"
+      ]
     }
   ],
-
   "autoApprovers": {
     // Auto-approve the Anthropic ranges advertised by the app connector,
     // so a re-resolve doesn't require manual approval in the admin console.
     "routes": {
-      "160.79.104.0/21": ["tag:tw-limited-trust"],
-      "2607:6bc0::/32": ["tag:tw-limited-trust"]
+      "160.79.104.0/21": [
+        "tag:tw-limited-trust"
+      ],
+      "2607:6bc0::/32": [
+        "tag:tw-limited-trust"
+      ]
     },
     // These tags may advertise themselves as exit nodes without approval.
     "exitNode": [
       "tag:claude-router",
       "tag:permanent-exit-node",
-      "tag:tw-limited-trust"
+      "tag:tw-limited-trust",
+      "tag:local-compute"
     ]
   },
   "grants": [
     {
       // Allow admins to access any device with the tag "tag:container"
-      "src": ["autogroup:admin"],
-      "dst": ["tag:container"],
-
+      "src": [
+        "autogroup:admin"
+      ],
+      "dst": [
+        "tag:container"
+      ],
       "app": {
         "tailscale.com/cap/tsidp": [
           {
             // allow access to UI
             "allow_admin_ui": true,
-
             // Security Token Service (STS) controls
-            "users":     ["*"],
-            "resources": ["*"],
+            "users": [
+              "*"
+            ],
+            "resources": [
+              "*"
+            ],
           },
         ],
       },
