@@ -11,11 +11,7 @@
     "tag:permanent-exit-node": [
       "autogroup:admin"
     ],
-    // Router used for Claude traffic.
-    "tag:claude-router": [
-      "autogroup:admin"
-    ],
-    // Taiwan app connector — advertises routes for Anthropic domains only.
+    // Taiwan app connector — advertises routes for the escape-china domains.
     "tag:tw-limited-trust": [
       "autogroup:admin"
     ],
@@ -32,7 +28,6 @@
       "src": [
         "autogroup:member",
         "tag:container",
-        "tag:claude-router",
         "tag:permanent-exit-node"
       ],
       "dst": [
@@ -86,23 +81,53 @@
         "*"
       ],
       "app": {
-        // App connector: route Claude/Anthropic domains through the
-        // tag:tw-limited-trust node (Taiwan egress) instead of the
-        // default route. The connector resolves these domains and
-        // advertises the resulting IPs as routes.
+        // App connector "escape-china": the single place to list any
+        // destination that must not egress from inside the GFW. Traffic
+        // to these domains is routed through the tag:tw-limited-trust
+        // node (Taiwan egress) instead of the default route; everything
+        // else takes the normal path. The connector resolves these
+        // domains and advertises the resulting IPs as routes.
+        //
+        // Add a domain here rather than creating a second connector, so
+        // "what has to escape China" stays answerable from one list.
+        // Note: routes outside the ranges in autoApprovers below land as
+        // pending approvals in the admin console.
         "tailscale.com/app-connectors": [
           {
-            "name": "claude-ai",
+            "name": "escape-china",
             "connectors": [
               "tag:tw-limited-trust"
             ],
             "domains": [
+              // Claude / Anthropic
               "claude.ai",
               "*.claude.ai",
               "claude.com",
               "*.claude.com",
               "anthropic.com",
-              "*.anthropic.com"
+              "*.anthropic.com",
+              // TikTok (app + web). CDN hostnames vary by region, so
+              // expect to extend this list as new ones show up.
+              "tiktok.com",
+              "*.tiktok.com",
+              "tiktokcdn.com",
+              "*.tiktokcdn.com",
+              "tiktokcdn-us.com",
+              "*.tiktokcdn-us.com",
+              "tiktokv.com",
+              "*.tiktokv.com",
+              "tiktokv.us",
+              "*.tiktokv.us",
+              "ttwstatic.com",
+              "*.ttwstatic.com",
+              "byteoversea.com",
+              "*.byteoversea.com",
+              "ibytedtos.com",
+              "*.ibytedtos.com",
+              "ibyteimg.com",
+              "*.ibyteimg.com",
+              "musical.ly",
+              "*.musical.ly"
             ]
           }
         ]
@@ -128,8 +153,11 @@
     }
   ],
   "autoApprovers": {
-    // Auto-approve the Anthropic ranges advertised by the app connector,
+    // Auto-approve routes advertised by the escape-china app connector,
     // so a re-resolve doesn't require manual approval in the admin console.
+    // Only the Anthropic ranges are listed; TikTok/ByteDance resolves into
+    // ByteDance and third-party CDN space that is too large and too
+    // volatile to enumerate, so those routes currently arrive pending.
     "routes": {
       "160.79.104.0/21": [
         "tag:tw-limited-trust"
@@ -140,7 +168,6 @@
     },
     // These tags may advertise themselves as exit nodes without approval.
     "exitNode": [
-      "tag:claude-router",
       "tag:permanent-exit-node",
       "tag:tw-limited-trust",
       "tag:local-compute"
