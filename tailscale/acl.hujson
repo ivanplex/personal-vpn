@@ -19,6 +19,14 @@
     // computation, including running of docker containers.
     "tag:local-compute": [
       "autogroup:admin"
+    ],
+    // This node sits inside the GFW. Started as a pure jurisdiction
+    // marker; it now also drives the "enter-china" app connector in
+    // nodeAttrs, so applying it to a node is a live routing decision and
+    // not just a label. It carries no access of its own, so it is worn
+    // alongside a duty tag such as tag:local-compute.
+    "tag:china": [
+      "autogroup:admin"
     ]
   },
   // Access rules. Currently wide open within the tailnet.
@@ -80,15 +88,23 @@
         "*"
       ],
       "app": {
-        // App connector "escape-china": the single place to list any
-        // destination that must not egress from inside the GFW. Traffic
-        // to these domains is routed through the tag:tw-limited-trust
-        // node (Taiwan egress) instead of the default route; everything
-        // else takes the normal path. The connector resolves these
-        // domains and advertises the resulting IPs as routes.
+        // Two connectors, pointing opposite ways across the same border.
+        // Everything not named in either list takes the normal path.
         //
-        // Add a domain here rather than creating a second connector, so
-        // "what has to escape China" stays answerable from one list.
+        //   escape-china  →  tag:tw-limited-trust (Taiwan egress)
+        //                    what must NOT egress from inside the GFW
+        //   enter-china   →  tag:china (Shanghai egress)
+        //                    what only works when it egresses from a
+        //                    mainland IP
+        //
+        // Each connector resolves its domains and advertises the resulting
+        // IPs as routes. Add a domain to the relevant list rather than
+        // creating a third connector, so each direction stays answerable
+        // from one place.
+        //
+        // A domain must appear in AT MOST ONE list — two connectors
+        // claiming the same name is a conflict, not a preference order.
+        //
         // Note: routes outside the ranges in autoApprovers below land as
         // pending approvals in the admin console.
         "tailscale.com/app-connectors": [
@@ -128,6 +144,256 @@
               "musical.ly",
               "*.musical.ly"
             ]
+          },
+          {
+            // The mirror of escape-china: apps that geo-gate on the
+            // client's egress IP and misbehave — degraded, partially
+            // blocked, or refusing outright — when reached from abroad.
+            // Routing them through Shanghai makes them see a mainland
+            // source address.
+            //
+            // Deliberately NOT here: *.aliyuncs.com and the other general
+            // cloud-hosting domains. They are shared hosting for a large
+            // fraction of the Chinese internet, so listing one would drag
+            // unrelated traffic through Shanghai for no reason.
+            "name": "enter-china",
+            "connectors": [
+              "tag:china"
+            ],
+            "domains": [
+              // Meituan / Dianping. sankuai.com is Meituan's infra
+              // domain; dpfile.com is the Dianping asset CDN, used by
+              // both apps.
+              "meituan.com",
+              "*.meituan.com",
+              "meituan.net",
+              "*.meituan.net",
+              "sankuai.com",
+              "*.sankuai.com",
+              "dianping.com",
+              "*.dianping.com",
+              "dpfile.com",
+              "*.dpfile.com",
+              // Taobao / Tmall. alicdn.com is the asset CDN, mmstat.com
+              // the telemetry endpoint — the app stalls on both.
+              "taobao.com",
+              "*.taobao.com",
+              "tmall.com",
+              "*.tmall.com",
+              "alicdn.com",
+              "*.alicdn.com",
+              "mmstat.com",
+              "*.mmstat.com",
+              // Alipay. alipayobjects.com is its static/CDN domain.
+              "alipay.com",
+              "*.alipay.com",
+              "alipayobjects.com",
+              "*.alipayobjects.com",
+              // WeChat / Weixin. qq.com is deliberately wildcarded: the
+              // messenger's endpoints are scattered across subdomains of
+              // it. That also pulls in Tencent's other properties, which
+              // is accepted breadth, not an oversight.
+              "qq.com",
+              "*.qq.com",
+              "weixin.com",
+              "*.weixin.com",
+              "wechat.com",
+              "*.wechat.com",
+              "qpic.cn",
+              "*.qpic.cn",
+              "qlogo.cn",
+              "*.qlogo.cn",
+              "gtimg.cn",
+              "*.gtimg.cn",
+              // Douyin — ByteDance's DOMESTIC stack, and the reason the
+              // no-overlap rule above matters: TikTok's international
+              // domains are in escape-china and point the other way.
+              // byteimg.com/ibyteimg.com and bytedance.com/byteoversea.com
+              // are near-homographs of each other; check which side a new
+              // ByteDance domain belongs on before adding it.
+              // snssdk.com is the known soft spot — it carries domestic
+              // Douyin traffic but ByteDance has used it internationally
+              // too, so if TikTok breaks after this lands, suspect it.
+              "douyin.com",
+              "*.douyin.com",
+              "douyinpic.com",
+              "*.douyinpic.com",
+              "douyinvod.com",
+              "*.douyinvod.com",
+              "douyinstatic.com",
+              "*.douyinstatic.com",
+              "snssdk.com",
+              "*.snssdk.com",
+              "byteimg.com",
+              "*.byteimg.com",
+              "pstatp.com",
+              "*.pstatp.com",
+              "toutiao.com",
+              "*.toutiao.com",
+              "ixigua.com",
+              "*.ixigua.com",
+              // Xiaohongshu / RED. xhscdn.com is the image and video CDN.
+              "xiaohongshu.com",
+              "*.xiaohongshu.com",
+              "xhscdn.com",
+              "*.xhscdn.com",
+              // Amap / Gaode. Alibaba's; AutoNavi is the company name and
+              // still serves a good deal of the API. Maps gate hard on
+              // egress IP — from abroad you get degraded tiles and wrong
+              // POI data rather than a clean failure. See the aliyuncs
+              // note above for why coverage here may be partial.
+              "amap.com",
+              "*.amap.com",
+              "autonavi.com",
+              "*.autonavi.com",
+              // Baidu, at the apex. This was scoped to map.baidu.com
+              // alone until search, Tieba and Netdisk were wanted too —
+              // widening to the whole domain is what the earlier note
+              // here said to do rather than accumulate subdomains one at
+              // a time. baidupcs.com is Netdisk's transfer domain and
+              // sits outside baidu.com. bdstatic/bdimg are the shared
+              // asset CDNs.
+              "baidu.com",
+              "*.baidu.com",
+              "baidupcs.com",
+              "*.baidupcs.com",
+              "bdstatic.com",
+              "*.bdstatic.com",
+              "bdimg.com",
+              "*.bdimg.com",
+              // Ctrip — the MAINLAND property only. trip.com is the same
+              // company's international arm, works fine from abroad, and
+              // must stay out of this list. tripcdn.com is shared between
+              // the two, so some Trip.com assets will take the Shanghai
+              // path as a side effect of fixing Ctrip.
+              "ctrip.com",
+              "*.ctrip.com",
+              "tripcdn.com",
+              "*.tripcdn.com",
+              // ---- Streaming and audio: the hardest geo-blocks ---------
+              // These fail outright from a foreign IP rather than merely
+              // degrading, because the gate is content licensing.
+              //
+              // Bilibili. bilibili.tv is the OVERSEAS arm — it works fine
+              // from abroad and stays out, same reasoning as trip.com.
+              "bilibili.com",
+              "*.bilibili.com",
+              "hdslb.com",
+              "*.hdslb.com",
+              "bilivideo.com",
+              "*.bilivideo.com",
+              "biliapi.net",
+              "*.biliapi.net",
+              // NetEase Cloud Music — the strictest gate on this list.
+              // 163.com is wildcarded because the player lives under it,
+              // which also pulls NetEase mail, news and games along.
+              "163.com",
+              "*.163.com",
+              "126.net",
+              "*.126.net",
+              "netease.com",
+              "*.netease.com",
+              // iQiyi
+              "iqiyi.com",
+              "*.iqiyi.com",
+              "qiyipic.com",
+              "*.qiyipic.com",
+              "qy.net",
+              "*.qy.net",
+              // Youku — Alibaba's, so subject to the aliyuncs caveat.
+              "youku.com",
+              "*.youku.com",
+              "ykimg.com",
+              "*.ykimg.com",
+              // Mango TV
+              "mgtv.com",
+              "*.mgtv.com",
+              // Ximalaya
+              "ximalaya.com",
+              "*.ximalaya.com",
+              "xmcdn.com",
+              "*.xmcdn.com",
+              // ---- Social, commerce, reference ------------------------
+              // Weibo. sina.com.cn, the news portal, is deliberately out;
+              // sinaimg.cn is the image CDN Weibo genuinely needs.
+              "weibo.com",
+              "*.weibo.com",
+              "weibo.cn",
+              "*.weibo.cn",
+              "sinaimg.cn",
+              "*.sinaimg.cn",
+              // JD
+              "jd.com",
+              "*.jd.com",
+              "360buyimg.com",
+              "*.360buyimg.com",
+              // Pinduoduo. temu.com is the international sibling: out.
+              "pinduoduo.com",
+              "*.pinduoduo.com",
+              "yangkeduo.com",
+              "*.yangkeduo.com",
+              "pddpic.com",
+              "*.pddpic.com",
+              // Kuaishou. Independent of ByteDance, so no escape-china
+              // collision to worry about. kwai.com is the international
+              // arm: out.
+              "kuaishou.com",
+              "*.kuaishou.com",
+              "kwaicdn.com",
+              "*.kwaicdn.com",
+              "gifshow.com",
+              "*.gifshow.com",
+              // Zhihu
+              "zhihu.com",
+              "*.zhihu.com",
+              "zhimg.com",
+              "*.zhimg.com",
+              // Douban
+              "douban.com",
+              "*.douban.com",
+              "doubanio.com",
+              "*.doubanio.com",
+              // ---- Gated on egress IP in practice ---------------------
+              // 12306, the railway booking system. The hardest gate on
+              // the list: it refuses foreign addresses outright instead
+              // of degrading, which is why it is worth having at all.
+              "12306.cn",
+              "*.12306.cn",
+              // Ele.me, Aliyun Drive, DingTalk — all Alibaba, all under
+              // the aliyuncs caveat above.
+              "ele.me",
+              "*.ele.me",
+              "elemecdn.com",
+              "*.elemecdn.com",
+              "aliyundrive.com",
+              "*.aliyundrive.com",
+              "alipan.com",
+              "*.alipan.com",
+              "dingtalk.com",
+              "*.dingtalk.com",
+              // Didi — the domestic entities only. didiglobal.com is the
+              // international arm and stays out.
+              "didichuxing.com",
+              "*.didichuxing.com",
+              "xiaojukeji.com",
+              "*.xiaojukeji.com",
+              // Mainland retail banks. They gate hardest of anything
+              // here, and they are also the most sensitive traffic on
+              // this list: TLS stays end to end, but Shanghai now sees
+              // the SNI and destination IP of every one of these
+              // connections. Drop this group if that is not a trade you
+              // want to make.
+              "icbc.com.cn",
+              "*.icbc.com.cn",
+              "ccb.com",
+              "*.ccb.com",
+              "boc.cn",
+              "*.boc.cn",
+              "cmbchina.com",
+              "*.cmbchina.com",
+              "abchina.com",
+              "*.abchina.com"
+            ]
           }
         ]
       }
@@ -154,14 +420,140 @@
   "autoApprovers": {
     // Auto-approve routes advertised by the escape-china app connector,
     // so a re-resolve doesn't require manual approval in the admin console.
-    // Only the Anthropic ranges are listed; TikTok/ByteDance resolves into
-    // ByteDance and third-party CDN space that is too large and too
-    // volatile to enumerate, so those routes currently arrive pending.
+    //
+    // Anthropic is the easy case: it owns a dedicated /21, so one entry
+    // covers it permanently.
+    //
+    // TikTok is the hard case, and the rest of this list is it. Measured
+    // 2026-09-13 from the 275 routes taipei-exit had actually advertised
+    // and collapsed to /16s: 36 of them, spanning Akamai, Google Cloud,
+    // AWS, Fastly, Tencent Cloud, DigitalOcean and HiNet (Akamai edge
+    // inside Taiwan). TikTok is multi-CDN, which is why no small tidy
+    // set exists — perfect aggregation of the raw /32s only gets from
+    // 275 prefixes down to 191.
+    //
+    // What this does NOT do: blessing a /16 does not route that /16
+    // through Taiwan. The connector only ever advertises addresses its
+    // own domain list resolves to, so these entries only decide whether
+    // such a route needs a click. Anything resolving outside these
+    // ranges still arrives pending, and as edge IPs rotate, some will.
+    // Re-run the measurement and extend rather than widening to /12s.
     "routes": {
       "160.79.104.0/21": [
         "tag:tw-limited-trust"
       ],
       "2607:6bc0::/32": [
+        "tag:tw-limited-trust"
+      ],
+      "23.210.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "23.217.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.36.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.54.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.96.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.102.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.104.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.111.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.117.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.120.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.128.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.149.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "34.160.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "35.190.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "43.132.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "43.175.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "45.196.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "45.197.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "61.61.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "65.9.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "71.18.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "89.187.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "98.98.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "138.113.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "143.244.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "149.104.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "184.26.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "184.27.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "184.29.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "185.180.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "199.103.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "199.232.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "203.69.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "203.74.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "210.61.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "210.71.0.0/16": [
+        "tag:tw-limited-trust"
+      ],
+      "2600:1417::/32": [
         "tag:tw-limited-trust"
       ]
     },
