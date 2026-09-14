@@ -81,13 +81,19 @@ lines there, never by commenting blocks inside a file.
 |---|---|
 | `https://immich.shark-kitefin.ts.net` | photos |
 | `https://idp.shark-kitefin.ts.net` | tsidp — OIDC for the tailnet |
-| `https://grafana.shark-kitefin.ts.net` | fleet dashboards — sign in as `ivan`, password in sops |
+| `https://grafana.shark-kitefin.ts.net` | fleet dashboards — signs you straight in through tsidp, no login page |
 | `ssh -N -L 9090:127.0.0.1:9090 ivan@hong-kong.shark-kitefin.ts.net` | Prometheus, which binds loopback only |
 
 Each of the three names is its own tsnet node on hong-kong, because
 `tailscale serve` publishes on the serving node's own MagicDNS name and there
 are no CNAMEs in `ts.net`. `hong-kong.shark-kitefin.ts.net` itself is the
 machine: SSH, and nothing else.
+
+Grafana has no email/password form: the `ivan` password in sops is break glass
+and now buys HTTP Basic on the API, not a login page. On the day tsidp is
+down, `…/login?disableAutoLogin=true` gets you a login page that does not
+bounce, and `curl -u ivan:<password> …/api/org` is what still authenticates.
+The reasoning is the header of `hosts/hong-kong/dashboard.nix`.
 
 ## Tailnet policy
 

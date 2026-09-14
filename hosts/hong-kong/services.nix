@@ -311,12 +311,50 @@
 #
 #      TEST THE PASSWORD LOGIN AGAIN afterwards. That is the entire point of
 #      keeping it, and it is the check that was worth making for Immich.
+#      (As written, that check is now HISTORY: step (d) below took the login
+#      form away on 2026-09-14 and moved break glass to HTTP Basic. Do the
+#      curl in (d) instead — the intent is unchanged.)
 #
 #      Then read Administration -> Users. If your tailnet identity landed as
 #      Viewer rather than Admin, adminEmailDomain in dashboard.nix does not
 #      match the email claim tsidp actually issues — the same mismatch that
 #      quietly produced two Immich accounts on 2026-09-01. Fix the domain, do
 #      not fix the account.
+#
+#   d) THE FORM COMES OFF — 2026-09-14, and only once (c) is known good.
+#      `loginFormVisible = false` in ./dashboard.nix makes tsidp the default
+#      IdP: /login redirects to it, and the email/password fields are both
+#      hidden and disabled. Order matters — take the form away only after the
+#      OIDC path has actually signed you in at least once, because the form is
+#      what you would otherwise use to fix OIDC.
+#
+#      Three checks after the deploy, in this order:
+#
+#        * https://grafana.shark-kitefin.ts.net lands you in the dashboard
+#          with no login page at all. If it lands on tsidp and stops, the
+#          redirect URI is still the thing to look at.
+#        * The break-glass path, which is now the ONLY reason the admin
+#          password still exists. Run it and put the result in the password
+#          manager next to the password:
+#
+#              curl -s -o /dev/null -w '%{http_code}\n' \
+#                   -u ivan:"$(sops -d --extract '["grafana-admin-password"]' \
+#                              secrets/hong-kong.yaml)" \
+#                   https://grafana.shark-kitefin.ts.net/api/org
+#
+#          200 is the answer. 401 means break glass is gone and you have not
+#          noticed — stop and put loginFormVisible back to true. This replaces
+#          "TEST THE PASSWORD LOGIN AGAIN" in (c): same check, same reason,
+#          different door.
+#        * https://grafana.shark-kitefin.ts.net/login?disableAutoLogin=true
+#          renders a login page instead of bouncing. It carries one button and
+#          no fields, which is correct. This is the escape hatch on the day
+#          tsidp is down, so confirm it works on a day it is not.
+#
+#      Signing out is expected to land you on that same disableAutoLogin URL
+#      rather than back in the dashboard — that is settings.auth
+#      .signout_redirect_url doing its job. Without it, auto_login re-signs you
+#      in before the page paints and "Sign out" looks broken.
 #
 # -- 8. What is deliberately still missing ----------------------------------
 #
@@ -365,9 +403,12 @@
     # STILL THE RULE. Comment these two lines back out before removing either
     # key, not after.
     #
-    # OIDC is still off: oidcClientId in ./dashboard.nix is null, so Grafana
-    # comes up with the login form only and declares no OIDC secret at all.
-    # Stage 7(c) turns it on, as its own deploy.
+    # OIDC went on in stage 7(c) on 2026-09-01 — oidcClientId is set, so
+    # grafana-oauth-client-secret is declared too and the same ordering rule
+    # covers all three keys. The login form came off in stage 7(d) on
+    # 2026-09-14: tsidp is now the default IdP and the admin password buys you
+    # HTTP Basic on /api, nothing else. Read the header of ./dashboard.nix
+    # before assuming there is a password prompt to fall back to.
     ./dashboard.nix
     ./grafana-frontdoor.nix
   ];
