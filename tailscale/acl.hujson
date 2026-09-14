@@ -36,6 +36,22 @@
       "src": [
         "autogroup:member",
         "tag:container",
+        // A TAGGED NODE IS NOT autogroup:member. Applying a tag transfers
+        // ownership of the device from the user to the tag, so the moment
+        // hong-kong became tag:local-compute it lost every src grant it had
+        // and could no longer OPEN a connection to anything on the tailnet.
+        //
+        // That failure is near-invisible, because nothing about reaching the
+        // box breaks: tag:local-compute is still a dst in the rule below and
+        // in the ssh block, so SSH in works, the web UIs work, and MagicDNS
+        // still resolves. Only traffic the box ITSELF initiates is dropped —
+        // which on hong-kong means Grafana and Immich calling tsidp's /token
+        // endpoint, i.e. OIDC login failing at the last step with a 20s
+        // timeout while /authorize (done by the BROWSER) succeeds.
+        //
+        // Diagnosed 2026-09-14. Listing it here restores exactly the access
+        // hong-kong had as an untagged member, no more.
+        "tag:local-compute",
       ],
       "dst": [
         "*:*", // any tailnet node, any port
