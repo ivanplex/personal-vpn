@@ -41,12 +41,12 @@
   # Stages 1-7(b) are all imported now: the array, sops, tsidp, Immich,
   # Prometheus, Grafana and its tsnet node. What is left:
   #
-  #   Stage 7(c) — OIDC for Grafana. `oidcClientId` in ./dashboard.nix is
-  #   null, which is a WORKING configuration, not a placeholder: Grafana comes
-  #   up with the login form only and declares no OIDC secret at all. tsidp
-  #   has to issue the client first, exactly as it did for Immich.
+  #   Stage 8 — containers. ./podman.nix and ./apps.nix: every compose file in
+  #   ./apps/ becomes a digest-pinned, resource-capped systemd unit, read at
+  #   EVALUATION time so all four gates apply. Staged and rehearsed in
+  #   ./services.nix; the canary is ./apps/whoami.yaml and is disposable.
   #
-  #   Stage 8 — alert delivery, not written at all. Alertmanager and the
+  #   Stage 9 — alert delivery, not written at all. Alertmanager and the
   #   external dead-man's-switch heartbeat, without which Prometheus on
   #   hong-kong is a thing that knows hong-kong is dying and cannot tell
   #   anyone.

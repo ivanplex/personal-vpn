@@ -1,0 +1,51 @@
+# whoami — the acceptance test for the whole compose mechanism.
+#
+# This app is DISPOSABLE and exists only to prove the loop: a file in this
+# directory becomes a digest-pinned, resource-capped, systemd-managed container
+# that Prometheus can already see, and removing the file removes all of it.
+#
+# It was chosen for what it does NOT need: no volume, so nothing can be written
+# to the wrong disk; no secret, so sops is not in the picture; no front door,
+# so no second tailscaled; and a ~5 MB static Go binary, so a failed pull is
+# obvious rather than slow. It answers any HTTP request with the request.
+#
+# Delete this file once the rehearsals in ../services.nix have been done and
+# a real app has taken its place. Until then, leave it — it is the cheapest
+# possible canary for the mechanism itself.
+#
+# The image is traefik/whoami:v1.10.2, resolved to its digest on 2026-09-17.
+# The tag is recorded here in a comment because the digest says what runs and
+# the tag says what you thought you were running.
+
+services:
+  whoami:
+    image: docker.io/traefik/whoami@sha256:1474027c316661cdec87df2623e13a41e7e1ce0ba99c24917631de8f300b5420
+
+    # Loopback, explicitly. Nothing here is reached by a published port —
+    # see the port assertion in ../apps.nix and the front-door note in
+    # ./README.md.
+    ports:
+      - "127.0.0.1:8088:80"
+
+    # Exercised deliberately, so the translator's handling of these is proven
+    # by the canary rather than discovered later on something that matters.
+    read_only: true
+    cap_drop:
+      - ALL
+
+    environment:
+      WHOAMI_NAME: hong-kong
+
+x-fleet:
+  # A static Go binary serving one string. If it ever needs more than this,
+  # something is wrong rather than busy.
+  memoryHigh: "24M"
+  memoryMax: "48M"
+
+  # 900 is the default and is written out here once, in the canary, so the
+  # ladder is visible in an actual file. Higher means the kernel takes it
+  # first: tailscaled -900, Immich 500, monitoring 800, this 900.
+  oomScoreAdjust: 900
+
+  cpuWeight: 10
+  ioWeight: 10
