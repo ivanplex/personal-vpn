@@ -28,6 +28,7 @@ services:
       - "-port"
       - "8088"
 
+
     # Loopback, explicitly. Nothing here is reached by a published port —
     # see the port assertion in ../apps.nix and the front-door note in
     # ./README.md.
