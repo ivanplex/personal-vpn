@@ -210,6 +210,17 @@ Secrets decrypt at activation into `/run/secrets`, a tmpfs — never onto disk, 
 
 On the container side, `virtualisation.oci-containers` with the podman backend gives one systemd unit per container. Pin images by digest, not tag. Enable `virtualisation.podman.autoPrune`.
 
+**Containers are declared as compose files, and the compose file is the source of truth.** Every `*.yaml` in `hosts/hong-kong/apps/` is a real Docker Compose file; `hosts/hong-kong/apps.nix` reads the directory at *evaluation* time and translates it into the oci-containers above. Committing a file is the deploy, in the same sense that committing anything else here is.
+
+The reason to do the translation at evaluation time rather than by running `podman compose up` from a checkout is the four gates. Evaluation-time means the containers are inside `system.build.toplevel`, so CI builds them, a failed activation rolls them back, and a generation rollback takes them with it. A runtime compose agent would sit outside all four, and the running state would drift from the commit with nothing able to detect it.
+
+Two consequences worth stating up front:
+
+- **A translator must never silently ignore a key.** If it drops `healthcheck:` or `networks:` without saying so, the repository *looks* like the source of truth while the machine runs something else — the worst of both worlds, and invisible in a diff. So `apps.nix` works from an explicit allowlist and fails the build on anything outside it, with a message per refused key explaining what it would have meant.
+- **The cost is import-from-derivation.** Nix has no `builtins.fromYAML`, so evaluation has to build a converter mid-flight. On a box where comin evaluates locally, that means one broken compose file blocks *every* deploy to that host until it is fixed. Branch protection plus gate 1 is what makes it acceptable: the breakage lands in Actions, not on the machine. The mitigations are in the header of `apps.nix`.
+
+> **`oci-containers` attaches to podman networks but does not create them.** An app that genuinely needs two containers on a private network is the point at which this mechanism should be replaced with `quadlet-nix`, which manages networks properly — not the point at which to hand-write a `podman network create` unit and hope. Until then `networks:` is refused outright.
+
 ---
 
 ## Monitoring, and who watches the watcher

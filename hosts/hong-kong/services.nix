@@ -15,6 +15,16 @@
 #                 Immich is simply unreachable — nothing else changes.
 #   immich.nix    the library directory, Immich, and the memory caps
 #
+#   podman.nix    the container RUNTIME and nothing else — no container runs
+#                 because of this file. Separate from apps.nix for exactly the
+#                 reason storage.nix is separate from immich.nix: a substrate
+#                 you can deploy and watch on its own before anything needs it.
+#   apps.nix      compose files as the source of truth. Reads ./apps/*.yaml at
+#                 EVALUATION time, so containers land inside
+#                 system.build.toplevel and all four gates apply to them.
+#                 Its header is the long version; ./apps/README.md is the
+#                 short one, aimed at whoever is adding an app.
+#
 #   metrics.nix   Prometheus: what is scraped, how long it is kept, and the
 #                 alert rules. No secrets, no UI, loopback only — so it is
 #                 deployable and verifiable entirely on its own.
@@ -356,7 +366,127 @@
 #      .signout_redirect_url doing its job. Without it, auto_login re-signs you
 #      in before the page paints and "Sign out" looks broken.
 #
-# -- 8. What is deliberately still missing ----------------------------------
+# -- 8. Containers, and compose files as the source of truth ----------------
+#
+#   THE POINT OF THIS STAGE: dropping a compose file into ./apps/ and pushing
+#   IS the deploy. comin already makes that true for NixOS generations; this
+#   extends it to containers without stepping outside the four gates, because
+#   the compose file is read at EVALUATION time and the containers therefore
+#   land inside system.build.toplevel.
+#
+#   The cost of that choice is import-from-derivation — Nix has no
+#   builtins.fromYAML — and the header of ./apps.nix is blunt about what IFD
+#   means on a box where comin evaluates locally on two cores. Read it before
+#   touching either file. The short version of the blast radius: ONE BROKEN
+#   COMPOSE FILE BLOCKS EVERY DEPLOY TO HONG-KONG until it is fixed. Branch
+#   protection plus gate 1 is what makes that acceptable.
+#
+#   Three commits, in this order, each isolating one failure class.
+#
+#   a) THE RUNTIME, ON ITS OWN.
+#
+#        imports = [ ... ./podman.nix ];
+#
+#      Installs podman and runs nothing. No socket, no docker alias, no
+#      aardvark-dns — the header of ./podman.nix says why each of those is
+#      absent, and the DNS one matters most on this machine.
+#
+#          podman info | head -20
+#          fleet-status                      # unchanged
+#
+#      The thing to actually check is that NOTHING moved: tailscaled, sshd and
+#      DNS are exactly as they were. A container runtime that perturbs those
+#      is not worth having.
+#
+#      THEN CHECK THE ONE THING THAT IS NOT OBVIOUS. nixpkgs enables
+#      podman.socket unconditionally — `dockerSocket.enable = false` only
+#      removes the /run/docker.sock ALIAS, not the socket — and that socket is
+#      root-equivalent to anyone in the `podman` group. The group is created
+#      empty and must stay that way:
+#
+#          systemctl is-active podman.socket   # active. This is expected.
+#          getent group podman                 # member list MUST be empty
+#
+#      The long version is in the header of ./podman.nix. If that group ever
+#      has a member, someone has been granted root without going through
+#      modules/base.nix, and that is the finding.
+#
+#   b) THE TRANSLATOR, AGAINST A DIRECTORY WITH NO APPS IN IT.
+#
+#        imports = [ ... ./podman.nix ./apps.nix ];
+#
+#      Temporarily move ./apps/whoami.yaml aside for this commit if you want
+#      the stage genuinely isolated. What is being proven here is only that
+#      IFD works — in CI and on the box — and that an apps/ directory holding
+#      nothing but README.md is inert.
+#
+#      THE QUESTION THIS STAGE SETTLES: gate 1 runs `nix build`, which allows
+#      IFD by default, so .github/workflows/build.yml needs no flag. But
+#      flake.nix also exposes `checks`, and `nix flake check` may refuse IFD.
+#      Run it once and find out:
+#
+#          nix flake check          # on the box; there is no nix on the MacBook
+#
+#      If it fails on import-from-derivation, add --allow-import-from-derivation
+#      to whatever invokes it and write that down here.
+#
+#   c) THE CANARY. ./apps/whoami.yaml, ~5 MB, no volume, no secret, no front
+#      door — see its own header for why each of those absences was chosen.
+#
+#          systemctl status podman-whoami
+#          curl -s 127.0.0.1:8088          # answers with the request
+#
+#      Then confirm the two properties that are the whole reason for doing it
+#      this way rather than with `podman compose up`:
+#
+#        * IT IS ALREADY MONITORED. No new exporter, no cAdvisor —
+#          modules/observability-node.nix:28 traded that away precisely
+#          because a container is a systemd unit. From the MacBook:
+#
+#              curl -s http://hong-kong.shark-kitefin.ts.net:9100/metrics \
+#                | grep 'node_systemd_unit_state.*podman-whoami'
+#
+#        * THE CAPS ARE REAL. They are set twice, on the unit and on the
+#          container, and ./apps.nix explains why neither alone is trusted.
+#          Check both landed:
+#
+#              systemctl show podman-whoami -p MemoryMax -p OOMScoreAdjust
+#              podman inspect whoami --format '{{.HostConfig.Memory}}'
+#
+#   THEN REHEARSE THE FAILURES. architecture.md:116 — a rescue mechanism you
+#   have never triggered is a hypothesis, not a feature, and every guard in
+#   ./apps.nix is exactly such a mechanism. Each row is one push:
+#
+#     x-fleet.enable: false          unit gone, nothing else moves
+#     delete whoami.yaml             unit gone. The IMAGE remains: autoPrune
+#                                    is dangling-only on purpose (see
+#                                    ./podman.nix), so reclaim it by hand with
+#                                    `podman image prune -a` while watching.
+#     change @sha256:... to :latest  CI FAILS. Never reaches the box.
+#     add a healthcheck: block       CI FAILS, naming the key.
+#     break the YAML (a stray tab)   CI FAILS, naming the FILE — not a yq
+#                                    stack trace. This is mitigation 3 in
+#                                    ./apps.nix's header, and it is the one
+#                                    worth seeing with your own eyes.
+#     add a second file whose
+#       service is also `whoami`     CI FAILS on the name collision.
+#     podman kill whoami             systemd restarts it.
+#     reboot                         it comes back; gate 4 promotes at T+10.
+#
+#   AND THE ONE THAT MATTERS MOST, because it is the property this whole
+#   design exists to preserve: GATE 4 MUST STAY BLIND TO ALL OF IT. Point the
+#   canary at an image digest that does not exist, deploy, and confirm that
+#   podman-whoami sits there failing while `fleet-status` still reports
+#   healthy and nothing reboots. modules/boot-verdict.nix:282-326 checks
+#   tailscaled, sshd and DNS and counts failed units as information only — so
+#   this should pass. Prove it, then put the digest back.
+#
+#   THE GOTCHA THAT WILL BITE YOU ONCE: Nix reads the git INDEX, so a compose
+#   file you have not `git add`ed is invisible and will not deploy, silently.
+#   That is operating rule 6 again. If a new app appears to do nothing at all,
+#   check `git status` before you check anything else.
+#
+# -- 9. What is deliberately still missing ----------------------------------
 #
 #   Alert DELIVERY. Every rule in ./metrics.nix evaluates, and every one of
 #   them surfaces in a web page nobody is looking at. architecture.md:221 is
@@ -411,5 +541,18 @@
     # before assuming there is a password prompt to fall back to.
     ./dashboard.nix
     ./grafana-frontdoor.nix
+
+    # ---- PHASE 5, stage 8: containers -----------------------------------
+    # The runtime first, on its own, because it runs nothing and can be
+    # watched for a day before anything depends on it. ./apps.nix asserts at
+    # EVAL TIME that ./podman.nix is imported alongside it, so the pair cannot
+    # come apart — the same guard ./immich.nix uses against ./storage.nix.
+    #
+    # ./apps.nix is the one file here that reads something OUTSIDE itself:
+    # every *.yaml in ./apps/ becomes a container. That makes commenting this
+    # line the kill switch for ALL of them at once, and `x-fleet: {enable:
+    # false}` the kill switch for one. Read its header before either.
+    ./podman.nix
+    ./apps.nix
   ];
 }

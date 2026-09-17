@@ -17,6 +17,47 @@ on:
   workflow_dispatch:
 
 jobs:
+  # GATE 1, the half that Nix cannot check.
+  #
+  # hosts/hong-kong/apps.nix parses those files with yq and validates them
+  # against its own allowlist. That proves they are valid YAML and that this
+  # fleet understands them — it does NOT prove they are valid COMPOSE. Without
+  # this job, "the compose file is the source of truth" would quietly decay
+  # into "a YAML file that happens to look like compose", and the day someone
+  # tries to run one locally to debug it, it would not run.
+  #
+  # `x-fleet:` passes here because `x-` keys are the compose spec's own
+  # extension mechanism. That is exactly why the fleet metadata is carried in
+  # one rather than in a sidecar file.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate every compose file
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(hosts/hong-kong/apps/*.yaml hosts/hong-kong/apps/*.yml)
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No compose files. Nothing to validate."
+            exit 0
+          fi
+
+          rc=0
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            if docker compose -f "$f" config --quiet; then
+              echo "ok"
+            else
+              echo "::error file=$f::not a valid Docker Compose file"
+              rc=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $rc
+
   build:
     runs-on: ubuntu-latest
     strategy:

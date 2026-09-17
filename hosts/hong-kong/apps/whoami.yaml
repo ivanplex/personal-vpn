@@ -1,0 +1,79 @@
+# whoami — the acceptance test for the whole compose mechanism.
+#
+# This app is DISPOSABLE and exists only to prove the loop: a file in this
+# directory becomes a digest-pinned, resource-capped, systemd-managed container
+# that Prometheus can already see, and removing the file removes all of it.
+#
+# It was chosen for what it does NOT need: no volume, so nothing can be written
+# to the wrong disk; no secret, so sops is not in the picture; no front door,
+# so no second tailscaled; and a ~5 MB static Go binary, so a failed pull is
+# obvious rather than slow. It answers any HTTP request with the request.
+#
+# Delete this file once the rehearsals in ../services.nix have been done and
+# a real app has taken its place. Until then, leave it — it is the cheapest
+# possible canary for the mechanism itself.
+#
+# The image is traefik/whoami:v1.10.2, resolved to its digest on 2026-09-17.
+# The tag is recorded here in a comment because the digest says what runs and
+# the tag says what you thought you were running.
+
+services:
+  whoami:
+    image: docker.io/traefik/whoami@sha256:1474027c316661cdec87df2623e13a41e7e1ce0ba99c24917631de8f300b5420
+
+    # whoami defaults to listening on port 80. It must NOT, here — see the
+    # cap_drop note below. `-port` is its own flag; exec form, because
+    # ../apps.nix refuses the string form of `command:`.
+    command:
+      - "-port"
+      - "8088"
+
+    # Loopback, explicitly. Nothing here is reached by a published port —
+    # see the port assertion in ../apps.nix and the front-door note in
+    # ./README.md.
+    ports:
+      - "127.0.0.1:8088:8088"
+
+    # Exercised deliberately, so the translator's handling of these is proven
+    # by the canary rather than discovered later on something that matters.
+    #
+    # THIS IS WHAT BROKE ON FIRST DEPLOY, 2026-09-17, and it is worth keeping
+    # the scar tissue. cap_drop: ALL removes CAP_NET_BIND_SERVICE, so the
+    # container could not bind its default port 80 and died on startup:
+    #
+    #     listen tcp :80: bind: permission denied
+    #
+    # restarting five times until StartLimitBurst gave up. The mechanism was
+    # working perfectly — the capability reached the container and did exactly
+    # what it says. The canary's own config was wrong.
+    #
+    # Fixed by moving the app above 1024 rather than by adding the capability
+    # back, because nothing in this directory should need to bind a privileged
+    # port: every one of them is reached through `tailscale serve`, which
+    # connects to a loopback port of our choosing. ../apps.nix now refuses this
+    # combination at build time.
+    #
+    # THE TRAP THAT HID IT: this does not reproduce under Docker Desktop for
+    # Mac, whose VM sets net.ipv4.ip_unprivileged_port_start=0 — every port is
+    # unprivileged there, so the container starts happily. Real Linux defaults
+    # to 1024. A local container test is not a test of this box.
+    read_only: true
+    cap_drop:
+      - ALL
+
+    environment:
+      WHOAMI_NAME: hong-kong
+
+x-fleet:
+  # A static Go binary serving one string. If it ever needs more than this,
+  # something is wrong rather than busy.
+  memoryHigh: "24M"
+  memoryMax: "48M"
+
+  # 900 is the default and is written out here once, in the canary, so the
+  # ladder is visible in an actual file. Higher means the kernel takes it
+  # first: tailscaled -900, Immich 500, monitoring 800, this 900.
+  oomScoreAdjust: 900
+
+  cpuWeight: 10
+  ioWeight: 10
