@@ -49,6 +49,18 @@
           inputs.comin.nixosModules.comin
           ./modules/comin.nix
 
+          # The one alert whose signal does not come from the machine it
+          # watches. Every comin metric read healthy on 2026-09-18 while
+          # hong-kong quietly stopped accepting deploys for an hour; this
+          # compares comin's deployed commit against the branch head from
+          # GitHub, which is the only way to see that from outside.
+          #
+          # On the spine because shanghai needs it MORE: it is the box behind
+          # the GFW, so it is the one most likely to lose the forge and stop
+          # deploying without complaint. Inert unless comin is enabled with a
+          # GitHub remote and a token.
+          ./modules/comin-liveness.nix
+
           # ---- PHASE 3b ----
           # Inert until a host declares sops.secrets: sops-nix's own config is
           # `mkIf (cfg.secrets != {})`, so importing this leaves shanghai — which

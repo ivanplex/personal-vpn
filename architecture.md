@@ -227,7 +227,7 @@ Two consequences worth stating up front:
 
 > **A tailnet name costs a whole tailscaled.** Not a config line — a daemon, a state directory, a device in the admin console and an auth key to rotate, on a 7.6 GB box. Give names to things that need them. And note the failure mode that has already bitten once: `--hostname=X` is a *request*, so if a node called `X` exists the new one silently becomes `X-1` and every URL is wrong with nothing logged as an error.
 
-**The public door** is a Cloudflare tunnel (`hosts/hong-kong/public.nix`), and an app is behind it only if its own compose file says `x-fleet.public: <hostname>`. This is how *strangers* reach things, and it is the only thing in the repository that lets them. One command answers the question completely:
+**The public door** is a Cloudflare tunnel (`hosts/hong-kong/public.nix`), and an app is behind it only if its own compose file says `x-fleet.public: <label>` — a label, never a hostname, with the zone living in one place. This is how *strangers* reach things, and it is the only thing in the repository that lets them. One command answers the question completely:
 
 ```sh
 grep -rn 'public:' hosts/hong-kong/apps/

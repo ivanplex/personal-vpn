@@ -1,6 +1,6 @@
 # hosts/hong-kong/public.nix — the public internet, and only that.
 #
-# One `x-fleet: {public: test.ivanchan.me}` in a compose file and that app is
+# One `x-fleet: {public: test}` in a compose file and that app is
 # on the internet under your own domain. Nothing else in this repository
 # publishes anything publicly, so this file is the complete answer to "what
 # can strangers reach?"
@@ -121,15 +121,13 @@
 
 let
   # ---- THE TWO VALUES THAT TIE THIS TO CLOUDFLARE ---------------------------
-  # The zone you own. Every `x-fleet.public` hostname must be under it, checked
-  # at eval time, so that a typo cannot try to create a record on a domain that
-  # is not yours.
+  # THE ONLY PLACE THE DOMAIN APPEARS. Every public app's hostname is built as
+  # `<x-fleet.public>.${zone}`, so a compose file names a label and never a
+  # domain — which is why there is no longer any assertion that a hostname is
+  # under the zone. It cannot not be.
   #
-  # This is the PARENT domain, not the hostname: `test.ivanchan.me` is an app,
-  # `ivanchan.me` is the boundary every app is checked against. Setting it to a
-  # single hostname would make the check exact but would need editing for every
-  # new app, and editing the boundary to add an app is how boundaries stop
-  # meaning anything.
+  # Change this and every public app moves with it, in one commit, with the
+  # DNS records following from ../../cloudflare/ which reads this same value.
   zone = "ivanchan.me";
 
   # The Cloudflare tunnel's name, as created in ../../cloudflare/. Must match
@@ -143,22 +141,25 @@ let
   # the rule at the top of this file.
   publicApps = lib.filterAttrs (_: a: a.public != null) config.fleet.apps;
 
-  badZone = lib.filterAttrs (
-    _: a: !(lib.hasSuffix ".${zone}" a.public) && a.public != zone
-  ) publicApps;
+  # THE HOSTNAME IS BUILT HERE, from a label the compose file gave and a zone
+  # it never sees. There used to be an assertion that a hostname was under the
+  # zone; it is gone, because constructing the name rather than accepting one
+  # turned "a domain you do not own" from an error that must be caught into
+  # one that cannot be written. That is the better kind of fix.
+  fqdn = a: "${a.public}.${zone}";
 
   noTarget = lib.filterAttrs (_: a: a.target == null) publicApps;
 
-  # What is ACTUALLY published. The assertions below already fail the build on
-  # everything in badZone and noTarget, so this filter is redundant — and it is
-  # here anyway, for the same reason ./apps.nix only translates apps that
-  # passed every check.
+  # What is ACTUALLY published. The assertion below already fails the build on
+  # everything in noTarget, so this filter is redundant — and it is here
+  # anyway, for the same reason ./apps.nix only translates apps that passed
+  # every check.
   #
   # An assertion is a promise that a build will not complete. This is a
-  # guarantee that the ingress map cannot contain the hostname in the first
-  # place. On the one file in this repository that decides what strangers can
-  # reach, those are worth having both of.
-  servedApps = builtins.removeAttrs publicApps (lib.attrNames badZone ++ lib.attrNames noTarget);
+  # guarantee that the ingress map cannot contain the entry in the first place.
+  # On the one file in this repository that decides what strangers can reach,
+  # both are worth having.
+  servedApps = builtins.removeAttrs publicApps (lib.attrNames noTarget);
 in
 {
   assertions = [
@@ -170,20 +171,6 @@ in
       '';
     }
   ]
-  ++ lib.mapAttrsToList (stem: a: {
-    assertion = false;
-    message = ''
-      hosts/hong-kong/apps/${a.file}: `x-fleet.public` is `${a.public}`, which
-      is not under the zone this host is configured for (`${zone}`).
-
-      Publishing is refused rather than attempted. A hostname on a domain you
-      do not own cannot work, and the failure would otherwise appear as a
-      Terraform error hours later rather than as a build failure now.
-
-      Fix the hostname, or if the zone itself is wrong, change `zone` at the
-      top of hosts/hong-kong/public.nix — there is exactly one place.
-    '';
-  }) badZone
   ++ lib.mapAttrsToList (stem: a: {
     assertion = false;
     message = ''
@@ -216,7 +203,7 @@ in
       # never typed. An empty set here is a WORKING configuration: the tunnel
       # comes up and answers 404 to everything, which is exactly what stage 1
       # of the bootstrap wants to see.
-      ingress = lib.mapAttrs' (_stem: a: lib.nameValuePair a.public a.target) servedApps;
+      ingress = lib.mapAttrs' (_stem: a: lib.nameValuePair (fqdn a) a.target) servedApps;
 
       # Anything not named above. NEVER a service — see the rule at the top.
       default = "http_status:404";

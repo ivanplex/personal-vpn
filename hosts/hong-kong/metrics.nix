@@ -305,6 +305,71 @@ in
                 annotations:
                   summary: "comin is suspended on {{ $labels.instance }}"
 
+              # ---------------------------------------------------------------
+              # THE ONE THAT WOULD HAVE CAUGHT 2026-09-18.
+              #
+              # Every alert above this point reads a comin metric, and on the
+              # day comin stopped deploying, ALL OF THEM READ HEALTHY: nothing
+              # had failed, because nothing had been attempted. comin fetched
+              # the new commits and declined them — `main` had been amended, so
+              # the deployed commit was no longer an ancestor of it, and
+              # hasNotBeenHardReset() returns quietly at DEBUG level.
+              #
+              # A machine that silently refuses is indistinguishable from the
+              # inside from a machine with nothing to do. The only way to tell
+              # is to ask something OTHER than comin what the branch head is,
+              # which is what modules/comin-liveness.nix does.
+              # ---------------------------------------------------------------
+              - alert: CominNotDeployingBranchHead
+                expr: comin_remote_head_matches_deployed == 0
+                for: 20m
+                labels:
+                  severity: critical
+                annotations:
+                  summary: "{{ $labels.instance }} has stopped applying commits and is not saying so"
+                  description: >-
+                    comin's deployed commit is not the head of the branch it
+                    tracks, and it has been that way for twenty minutes —
+                    longer than any normal deploy. Expect every other comin
+                    alert to be silent; that is the point of this one.
+                    First suspect is a rewritten history: if the deployed
+                    commit is no longer an ancestor of the branch, comin skips
+                    it without logging above debug. Check with
+                    `git merge-base --is-ancestor <deployed> origin/<branch>`
+                    and fix it forward with `git merge -s ours <deployed>`.
+                    NEVER amend or force-push a branch a box has deployed.
+
+              - alert: CominLivenessCheckStale
+                expr: >-
+                  time() - comin_remote_head_check_timestamp_seconds > 1800
+                for: 15m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "the comin liveness check on {{ $labels.instance }} has not run in 30 minutes"
+                  description: >-
+                    comin-liveness.timer fires every five minutes. If the
+                    series is stale the WATCHER is broken, which means the
+                    alert above cannot fire and you are blind to the failure
+                    it exists for. `systemctl status comin-liveness.timer`.
+                    A missing series entirely means the textfile collector is
+                    not enabled or the unit has never succeeded.
+
+              - alert: CominLivenessCheckFailing
+                expr: comin_remote_head_check_success == 0
+                for: 1h
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "the comin liveness check on {{ $labels.instance }} cannot reach comin or GitHub"
+                  description: >-
+                    The check ran but could not get both halves of its
+                    comparison, so it deliberately published no verdict rather
+                    than a misleading zero. Usually an expired PAT in
+                    /etc/comin/github-token — the same token comin itself uses,
+                    so CominCannotFetch is probably firing too — or GitHub
+                    being unreachable, which on shanghai is a normal Tuesday.
+
           # ====================================================== resources ==
           - name: resources
             rules:

@@ -81,12 +81,15 @@ x-fleet:
 
   # PUBLISHED TO THE INTERNET at https://test.ivanchan.me — the canary for
   # ../public.nix, exactly as the container itself is the canary for
-  # ../apps.nix. A hostname, never a port: the target is derived from the
-  # ports: entry above.
+  # ../apps.nix.
+  #
+  # A LABEL, not a hostname and not a port. `test` + the zone in ../public.nix
+  # is what makes the URL; the target is derived from the ports: entry above.
+  # Neither the domain nor the port is sayable here, which is the design.
   #
   # This app answers with the request it received and holds nothing, which is
   # why it is the one safe thing to point the public internet at while proving
   # the mechanism. TAKE IT DOWN once stage 9 is done — remove this key, push,
   # and `terraform apply`. A door you have never closed is not a door you know
   # how to close.
-  public: test.ivanchan.me
+  public: test

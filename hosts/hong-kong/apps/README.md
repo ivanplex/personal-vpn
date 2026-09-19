@@ -76,8 +76,8 @@ x-fleet:
   ioWeight: 10
   requiresMounts: []        # paths that must be real mountpoints before this starts
   secrets: []               # sops key names → --env-file /run/secrets/<name>
-  public: null              # a HOSTNAME → on the public internet. See below.
-  frontdoor: null           # a LABEL → its own tailnet name. See below.
+  public: null              # a LABEL → <label>.<zone> on the internet. See below.
+  frontdoor: null           # a LABEL → <label>.shark-kitefin.ts.net. See below.
 ```
 
 `x-fleet` applies to **every service in the file**. A file with two services
@@ -132,23 +132,24 @@ retries that generation.
 
 ```yaml
 x-fleet:
-  public: polls.example.com
+  public: polls          # -> https://polls.ivanchan.me
 ```
 
 Puts the app **on the public internet** through the Cloudflare tunnel in
-`../public.nix`, under your own domain. Read that file's header before using
-it.
+`../public.nix`. Read that file's header before using it.
 
-**A hostname, never a port.** The target cloudflared connects to is derived
-from this service's own `ports:` entry. That is deliberate: cloudflared runs
-on the host and can reach Immich on 2283, Prometheus on 9090, Grafana and
-tsidp. If you could type a target, publishing the photo library to the
-internet would be one mistyped line, deployed within a minute, on a machine
-9,000 km away. You cannot type one.
+**A label. Not a hostname, not a domain, not a port.** The zone lives in
+`../public.nix` and the port comes from this service's own `ports:` entry, so
+neither is sayable here — which is the entire design:
 
-Three things fail the build rather than guess:
+- You cannot publish to a domain you do not own, because you cannot name one.
+- You cannot aim the tunnel at Immich (2283), Prometheus (9090) or tsidp,
+  because you cannot name a port. cloudflared runs on the host and can reach
+  all of them; if a target were typeable, publishing the photo library would
+  be one mistyped line deployed within a minute on a machine 9,000 km away.
 
-- a hostname not under the configured zone
+Two things fail the build rather than guess:
+
 - `public:` on a file with more than one service — which one would it publish?
 - `public:` on a service with more than one port — which one would it target?
 
@@ -172,16 +173,20 @@ grep -rn 'public:' .
 
 ```yaml
 x-fleet:
-  frontdoor: rallly
+  frontdoor: rallly      # -> https://rallly.shark-kitefin.ts.net
 ```
 
-Gives the app its **own tailnet name** — `https://rallly.shark-kitefin.ts.net`,
-real certificate, no open port. Handled by `../frontdoors.nix`.
+Gives the app its **own tailnet name** — real certificate, no open port.
+Handled by `../frontdoors.nix`.
 
-A label, never a port, for the same reason as `public`. Lowercase letters,
-digits and interior hyphens only: it becomes a MagicDNS name, a systemd unit
-name *and* a state directory, and anything else breaks at least one of those at
-runtime.
+Exactly the same shape as `public`: a label, and the rest is built for you.
+The two differ only in which door they open, so an app reachable both ways
+usually repeats the same label twice.
+
+Lowercase letters, digits and interior hyphens only. `frontdoor` is the
+stricter of the two because it also becomes a systemd unit name and a state
+directory under `/var/lib` — so both keys are held to that rule rather than
+having two.
 
 **It costs a whole tailscaled process.** `tailscale serve` publishes on the
 serving node's own MagicDNS name and ts.net has no CNAMEs, so a distinct name

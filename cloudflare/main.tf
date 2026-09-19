@@ -72,6 +72,16 @@ locals {
     file("${path.module}/../hosts/hong-kong/public.nix")
   )[0]
 
+  # And the zone, from the same file and for the same reason. A compose file
+  # names a LABEL; the hostname is label + zone. Both halves of that sum have
+  # to come from the same place or the DNS record and the tunnel's ingress
+  # rule end up disagreeing — a name that resolves to a tunnel with no rule
+  # behind it, which reads as an app bug and is not one.
+  nix_zone = regex(
+    "zone = \"([a-z0-9.-]+)\"",
+    file("${path.module}/../hosts/hong-kong/public.nix")
+  )[0]
+
   # Every compose file, parsed. yamldecode is Terraform's own — no external
   # tooling, and it fails loudly on a malformed file rather than skipping it.
   composed = {
@@ -82,9 +92,13 @@ locals {
   # Only the ones asking to be public, and only while enabled. `enable: false`
   # must take the DNS record away too — otherwise a disabled app keeps a name
   # pointing at a tunnel that no longer routes it.
+  #
+  # x-fleet.public is a LABEL. The hostname is built here exactly as
+  # hosts/hong-kong/public.nix builds it, from the same zone, so the record
+  # and the ingress rule are the same string by construction.
   public_hosts = {
     for f, doc in local.composed :
-    doc["x-fleet"].public => f
+    "${doc["x-fleet"].public}.${local.nix_zone}" => f
     if try(doc["x-fleet"].public, null) != null
     && try(doc["x-fleet"].enable, true) == true
   }

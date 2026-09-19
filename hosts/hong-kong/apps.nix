@@ -635,13 +635,26 @@ let
               '';
 
         # ---- x-fleet.public and x-fleet.frontdoor --------------------------
-        # Both put this app somewhere other than the box's own loopback, and
-        # both need ONE unambiguous target to point at. Everything here exists
-        # to keep that target DERIVABLE.
+        # Both put this app somewhere other than the box's own loopback. They
+        # are deliberately SYMMETRIC: each takes a one-word LABEL, and the name
+        # is built from it —
         #
-        # The moment a human types a port, publishing Prometheus becomes a typo
-        # rather than an impossibility. See ./public.nix and ./frontdoors.nix —
-        # neither of them parses a port, because neither of them is given one.
+        #     public:    rallly   ->  https://rallly.<zone>              (internet)
+        #     frontdoor: rallly   ->  https://rallly.shark-kitefin.ts.net (tailnet)
+        #
+        # Two things fall out of building the name rather than accepting one.
+        #
+        # A zone never appears in a compose file, so it cannot be typo'd there,
+        # and "hostname on a domain you do not own" stops being an error that
+        # has to be CHECKED and becomes one that cannot be EXPRESSED. The
+        # assertion that used to catch it is gone because there is nothing left
+        # for it to catch.
+        #
+        # And neither takes a port. The target is derived from the service's
+        # own ports: entry, so aiming the public internet at Immich (2283) or
+        # Prometheus (9090) is not a typo away — it is not sayable. See
+        # ./public.nix and ./frontdoors.nix; neither parses a port, because
+        # neither is given one.
         exposureKeys =
           if builtins.isAttrs fleet then
             lib.filter (k: fleet ? ${k}) [ "public" "frontdoor" ]
@@ -666,23 +679,31 @@ let
               ) "${file}: `x-fleet.${k}` must be a string."
             ) exposureKeys
 
-            # A tsnet node name becomes a MagicDNS label, a systemd unit name
-            # and a state directory. Anything outside [a-z0-9-] breaks at least
-            # one of those, and it breaks it at RUNTIME.
-            ++ lib.optional
-              (
-                builtins.elem "frontdoor" exposureKeys
-                && builtins.isString fleet.frontdoor
-                && builtins.match "[a-z0-9]([a-z0-9-]*[a-z0-9])?" fleet.frontdoor == null
-              )
-              ''
-                ${file}: `x-fleet.frontdoor` is `${fleet.frontdoor}`, which is not a
-                usable name label.
+            # Both labels become DNS names. `frontdoor` additionally becomes a
+            # systemd unit name and a state directory under /var/lib, so it is
+            # the stricter of the two — and rather than keep two rules, both
+            # are held to it. Anything outside this breaks something at
+            # RUNTIME, which is the worst time to find out.
+            ++ lib.concatMap (
+              k:
+              lib.optional
+                (
+                  builtins.isString fleet.${k}
+                  && builtins.match "[a-z0-9]([a-z0-9-]*[a-z0-9])?" fleet.${k} == null
+                )
+                ''
+                  ${file}: `x-fleet.${k}` is `${toString fleet.${k}}`, which is not a
+                  usable name label.
 
-                It becomes a MagicDNS name, a systemd unit name and a state
-                directory under /var/lib. Lowercase letters, digits and interior
-                hyphens only.
-              ''
+                  It is a LABEL, not a hostname and not a URL — the rest of the
+                  name is built from the zone. Lowercase letters, digits and
+                  interior hyphens only.
+
+                  If you wrote a full hostname like `app.example.com`, write
+                  just `app`: the domain comes from one place, and that is the
+                  point.
+                ''
+            ) exposureKeys
 
             ++ lib.optional (n != 1) ''
               ${file}: ${named} is set, but this file defines ${toString n} service(s).
