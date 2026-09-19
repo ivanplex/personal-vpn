@@ -29,7 +29,7 @@
         "type": "prometheus",
         "uid": "fleet-prometheus"
       },
-      "description": "One row per catalogued service. `Exposure` and `Address` come from fleet_service_info, which is generated from the repository at build time \u2014 a compose file's x-fleet.public plus the zone in public.nix \u2014 because whether something is on the public internet is a fact about the config, not something the machine can be asked. Everything else is live.",
+      "description": "One row per CATALOGUED service \u2014 every query is filtered by fleet_service_info, so a systemd unit this repo does not describe never appears. `Exposure` and `Address` are generated from the repository at build time (a compose file's x-fleet.public plus the zone in public.nix), because whether something is public is a fact about the config, not something the machine can be asked. Everything else is live.",
       "gridPos": {
         "h": 11,
         "w": 24,
@@ -43,7 +43,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "fleet_service_info",
+          "expr": "fleet_service_info{exposure=~\"$exposure\"}",
           "legendFormat": "",
           "range": false,
           "instant": true,
@@ -56,7 +56,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "max by (name) (node_systemd_unit_state{state=\"active\"})",
+          "expr": "max by (name) (node_systemd_unit_state{state=\"active\"})\n  and on (name) label_replace(fleet_service_info{exposure=~\"$exposure\"}, \"name\", \"$1\", \"unit\", \"(.*)\")",
           "legendFormat": "",
           "range": false,
           "instant": true,
@@ -69,7 +69,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "fleet_service_memory_bytes",
+          "expr": "fleet_service_memory_bytes and on (unit) fleet_service_info{exposure=~\"$exposure\"}",
           "legendFormat": "",
           "range": false,
           "instant": true,
@@ -82,7 +82,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "rate(fleet_service_cpu_seconds_total[5m])",
+          "expr": "rate(fleet_service_cpu_seconds_total[5m]) and on (unit) fleet_service_info{exposure=~\"$exposure\"}",
           "legendFormat": "",
           "range": false,
           "instant": true,
@@ -609,7 +609,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "fleet_service_memory_bytes",
+          "expr": "fleet_service_memory_bytes and on (unit) fleet_service_info{exposure=~\"$exposure\"}",
           "legendFormat": "{{unit}}",
           "range": true,
           "instant": false,
@@ -669,7 +669,7 @@
             "type": "prometheus",
             "uid": "fleet-prometheus"
           },
-          "expr": "rate(fleet_service_cpu_seconds_total[5m])",
+          "expr": "rate(fleet_service_cpu_seconds_total[5m]) and on (unit) fleet_service_info{exposure=~\"$exposure\"}",
           "legendFormat": "{{unit}}",
           "range": true,
           "instant": false,
@@ -715,7 +715,49 @@
     "fleet"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "exposure",
+        "label": "Exposure",
+        "type": "custom",
+        "query": "public,tailnet,internal",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "All",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "public",
+            "value": "public"
+          },
+          {
+            "selected": false,
+            "text": "tailnet",
+            "value": "tailnet"
+          },
+          {
+            "selected": false,
+            "text": "internal",
+            "value": "internal"
+          }
+        ],
+        "description": "Narrow every panel to one kind of exposure. Defaults to all three."
+      }
+    ]
   },
   "time": {
     "from": "now-6h",
