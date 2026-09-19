@@ -24,6 +24,11 @@
 #                 system.build.toplevel and all four gates apply to them.
 #                 Its header is the long version; ./apps/README.md is the
 #                 short one, aimed at whoever is adding an app.
+#   public.nix    THE ONLY FILE HERE THAT FACES THE INTERNET. A Cloudflare
+#                 tunnel, and one ingress rule per app whose compose file
+#                 carries `x-fleet.public`. Everything else in this directory
+#                 is tailnet-only. `grep -rn 'public:' ./apps/` is the whole
+#                 answer to what strangers can reach.
 #
 #   metrics.nix   Prometheus: what is scraped, how long it is kept, and the
 #                 alert rules. No secrets, no UI, loopback only — so it is
@@ -486,7 +491,97 @@
 #   That is operating rule 6 again. If a new app appears to do nothing at all,
 #   check `git status` before you check anything else.
 #
-# -- 9. What is deliberately still missing ----------------------------------
+# -- 9. The public internet -------------------------------------------------
+#
+#   THE LINE THIS STAGE CROSSES: everything before it is reachable only from
+#   the tailnet. After it, one key in a compose file puts an app in front of
+#   strangers. Read the header of ./public.nix in full before doing any of
+#   this — particularly the part about what cloudflared can see from this
+#   host, and why the ingress target is DERIVED rather than typed.
+#
+#   The whole answer to "what can strangers reach?" is one command:
+#
+#       grep -rn 'public:' hosts/hong-kong/apps/
+#
+#   WHY NOT TAILSCALE. Funnel was evaluated properly on 2026-09-18 and does
+#   not work here: it serves only <node>.shark-kitefin.ts.net, and a CNAME
+#   from your own domain fails TLS because the certificate is for the ts.net
+#   name. Fronting it with Cloudflare to fix that gives you both vendors and
+#   neither benefit. Funnel also has no WAF and no rate limiting, which on two
+#   cores is the decisive objection, not the certificate. The long version is
+#   in ./public.nix.
+#
+#   a) TERRAFORM FIRST, then sops, then Nix. See ../../cloudflare/README.md.
+#      The ordering is the same shape as the tsidp clients in stage 3 and is
+#      not circular — Cloudflare needs nothing from this box.
+#
+#          cd cloudflare && terraform init && terraform apply
+#          terraform output tunnel_id
+#
+#      Then the credentials into sops BEFORE ./public.nix is imported on
+#      `main`. Same rule as the Grafana keys in stage 7(a), same reason: a
+#      declared secret missing from the file fails sops-install-secrets during
+#      ACTIVATION, and comin neither rolls back nor retries.
+#
+#   b) SET `zone` AND `tunnelName` at the top of ./public.nix. They are marked
+#      REPLACE THIS. `tunnelName` must match ../../cloudflare/terraform.tfvars
+#      or cloudflared starts cleanly and serves nothing, which is a miserable
+#      thing to debug.
+#
+#   c) THE TUNNEL, PUBLISHING NOTHING.
+#
+#        imports = [ ... ./public.nix ];
+#
+#      No app has `x-fleet.public` yet, so the ingress map is empty and the
+#      tunnel answers 404 to everything. That is a WORKING configuration and
+#      the correct result for this step.
+#
+#          systemctl status cloudflared-tunnel-test-tunnel
+#          journalctl -u cloudflared-tunnel-test-tunnel | grep -i "registered\|connection"
+#
+#      Confirm in the Cloudflare dashboard that the tunnel is HEALTHY, and
+#      that no hostname resolves to it yet.
+#
+#   d) THE CANARY. Add to ./apps/whoami.yaml:
+#
+#          x-fleet:
+#            public: whoami-test.<your zone>
+#
+#      then `cd cloudflare && terraform apply`. BOTH halves are needed — the
+#      push makes the tunnel route it, the apply makes the name resolve.
+#
+#      TEST FROM MOBILE DATA, not from the tailnet and not from your own wifi.
+#      The entire point is reachability by someone with none of your access:
+#
+#          curl -s https://test.ivanchan.me
+#          dig +short test.ivanchan.me       # CNAME -> <uuid>.cfargotunnel.com
+#
+#      And on the box, the property that makes this safe — nothing new is
+#      listening on anything but loopback and the tailnet:
+#
+#          ss -lntp | grep -v '127.0.0.1\|::1\|100\.'    # expect nothing new
+#
+#      Then TAKE IT DOWN AGAIN: remove the key, push, `terraform apply`, and
+#      confirm the name stops resolving. A door you have never closed is not a
+#      door you know how to close.
+#
+#   THEN REHEARSE THE FAILURES. Each is a push; the first three must fail in
+#   CI and never reach the box:
+#
+#     hostname outside the zone      CI FAILS, naming the file and the zone
+#     public: on a 2-service file    CI FAILS — which service would it be?
+#     public: on a 2-port service    CI FAILS — which port would it be?
+#     stop cloudflared               public gone; tailnet, SSH, Immich,
+#                                    Grafana all still fine
+#     request an unmapped hostname   404 from the catch-all, never a service
+#     x-fleet.enable: false          the app AND its DNS record both go
+#
+#   And the one that matters most, unchanged: GATE 4 MUST STAY BLIND TO ALL OF
+#   IT. modules/boot-verdict.nix:282-326 checks tailscaled, sshd and DNS and
+#   counts failed units as information only. Kill cloudflared and confirm
+#   `fleet-status` still reports healthy and nothing reboots.
+#
+# -- 10. What is deliberately still missing ---------------------------------
 #
 #   Alert DELIVERY. Every rule in ./metrics.nix evaluates, and every one of
 #   them surfaces in a web page nobody is looking at. architecture.md:221 is
@@ -554,5 +649,31 @@
     # false}` the kill switch for one. Read its header before either.
     ./podman.nix
     ./apps.nix
+
+    # A tsnet node per app that asks for one, so it answers at
+    # https://<label>.shark-kitefin.ts.net. The generalisation of
+    # ./frontdoor.nix, which stays hand-written for Immich because its target
+    # comes from a NixOS option rather than a compose file.
+    #
+    # Publishes NOTHING by itself: an app gets a name only if its own compose
+    # file says `x-fleet.frontdoor`. Costs one tailscaled per exposed app, so
+    # read its header before adding the fourth.
+    ./frontdoors.nix
+
+    # ---- PHASE 5, stage 9: the public internet --------------------------
+    # THE LINE THIS CROSSES: everything above is tailnet-only. This file is
+    # what makes an app reachable by strangers, and it is the ONLY thing in
+    # this repository that does. Commenting this line takes every public app
+    # off the internet at once; `x-fleet.public` takes one off.
+    #
+    # It publishes nothing by itself — an app is public only if its own
+    # compose file says so, and the target is derived from that file's ports
+    # rather than typed, so a mistake cannot aim it at Immich or Prometheus.
+    # Read its header before touching it.
+    #
+    # Requires ./apps.nix (it consumes config.fleet.apps) and the DNS side in
+    # ../../cloudflare/, which is applied by hand — a machine should not be
+    # able to change what the world can reach about itself.
+    ./public.nix
   ];
 }

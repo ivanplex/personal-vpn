@@ -221,6 +221,24 @@ Two consequences worth stating up front:
 
 > **`oci-containers` attaches to podman networks but does not create them.** An app that genuinely needs two containers on a private network is the point at which this mechanism should be replaced with `quadlet-nix`, which manages networks properly — not the point at which to hand-write a `podman network create` unit and hope. Until then `networks:` is refused outright.
 
+### Reaching the apps: two doors, deliberately separate
+
+**The tailnet door** is `tailscale serve` on a per-service tsnet node. MagicDNS has no CNAMEs, so a distinct name means a distinct *node* — there is no aliasing mechanism to borrow, and the machine's own name is reserved for SSH. Immich and Grafana keep hand-written files (`frontdoor.nix`, `grafana-frontdoor.nix`) because their targets come from NixOS options; compose apps get one from `x-fleet.frontdoor` via `frontdoors.nix`. This is how *you* reach things.
+
+> **A tailnet name costs a whole tailscaled.** Not a config line — a daemon, a state directory, a device in the admin console and an auth key to rotate, on a 7.6 GB box. Give names to things that need them. And note the failure mode that has already bitten once: `--hostname=X` is a *request*, so if a node called `X` exists the new one silently becomes `X-1` and every URL is wrong with nothing logged as an error.
+
+**The public door** is a Cloudflare tunnel (`hosts/hong-kong/public.nix`), and an app is behind it only if its own compose file says `x-fleet.public: <hostname>`. This is how *strangers* reach things, and it is the only thing in the repository that lets them. One command answers the question completely:
+
+```sh
+grep -rn 'public:' hosts/hong-kong/apps/
+```
+
+**Tailscale Funnel was evaluated for this and rejected.** It serves only `<node>.<tailnet>.ts.net`; a CNAME from your own domain resolves and then fails TLS, because the certificate is issued for the ts.net name and Tailscale cannot issue one for a domain it does not control. Fronting Funnel with Cloudflare to work around that leaves you with two vendors, Funnel's end-to-end encryption spent anyway, and every Funnel limit still in force. Latency was not a factor — there is a DERP relay in Hong Kong.
+
+> **The decisive objection to Funnel was not the certificate, it was rate limiting.** Funnel has no WAF, no rate limiting and no DDoS absorption. This box is two cores and 7.6 GB and is already oversubscribed at peak, and the OOM ladder takes monitoring (800) before Immich (500) — so an unauthenticated public app under load loses you observability first and the photo library second, and you find out late because the thing that would have told you died first. Funnel remains the right tool wherever a `ts.net` URL is acceptable; it is the custom domain and the absent rate limiting together that rule it out here.
+
+Two consequences of having a public door at all. **tsidp stays tailnet-only** — a stranger's browser cannot reach it, so public apps authenticate with their own mechanisms (Rallly's email magic links, which is what makes its SMTP configuration load-bearing rather than optional). And **cloudflared can reach every loopback service on the host**, which is why `x-fleet.public` takes a hostname and never a port: the target is derived from the app's own `ports:` entry, so aiming it at Immich or Prometheus is not a thing the file can express.
+
 ---
 
 ## Monitoring, and who watches the watcher

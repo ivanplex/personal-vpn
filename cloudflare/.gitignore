@@ -1,0 +1,26 @@
+# Terraform
+*.tfvars
+*.tfvars.json
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+plan
+
+# Backups and variants of the tfvars. `*.tfvars` alone does NOT match
+# terraform.tfvars.bak or terraform.tfvars.1 — and those hold the same
+# credentials as the original.
+*.tfvars.*
+*.tfvars.bak*
+
+# ...except the committed template, which holds only REPLACE_ME.
+# A negation must come AFTER the pattern it exempts.
+!terraform.tfvars.example

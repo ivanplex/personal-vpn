@@ -76,6 +76,8 @@ x-fleet:
   ioWeight: 10
   requiresMounts: []        # paths that must be real mountpoints before this starts
   secrets: []               # sops key names → --env-file /run/secrets/<name>
+  public: null              # a HOSTNAME → on the public internet. See below.
+  frontdoor: null           # a LABEL → its own tailnet name. See below.
 ```
 
 `x-fleet` applies to **every service in the file**. A file with two services
@@ -126,15 +128,85 @@ A declared secret that is missing from the file fails
 `sops-install-secrets` during **activation**, and comin neither rolls back nor
 retries that generation.
 
+### `public`
+
+```yaml
+x-fleet:
+  public: polls.example.com
+```
+
+Puts the app **on the public internet** through the Cloudflare tunnel in
+`../public.nix`, under your own domain. Read that file's header before using
+it.
+
+**A hostname, never a port.** The target cloudflared connects to is derived
+from this service's own `ports:` entry. That is deliberate: cloudflared runs
+on the host and can reach Immich on 2283, Prometheus on 9090, Grafana and
+tsidp. If you could type a target, publishing the photo library to the
+internet would be one mistyped line, deployed within a minute, on a machine
+9,000 km away. You cannot type one.
+
+Three things fail the build rather than guess:
+
+- a hostname not under the configured zone
+- `public:` on a file with more than one service — which one would it publish?
+- `public:` on a service with more than one port — which one would it target?
+
+Publishing needs **both halves**: the push (so the tunnel routes it) and
+`terraform apply` in `../../cloudflare/` (so the name resolves). Same for
+taking it down. `enable: false` removes both.
+
+And the thing to actually keep in mind: **the app's own login page is now the
+only thing between strangers and this box.** tsidp is tailnet-only and stays
+that way, so a public app cannot use it. If an app should not be wide open,
+Cloudflare Access can put authentication in front of the hostname without the
+app supporting it at all — see `../../cloudflare/README.md`.
+
+What can strangers reach?
+
+```sh
+grep -rn 'public:' .
+```
+
+### `frontdoor`
+
+```yaml
+x-fleet:
+  frontdoor: rallly
+```
+
+Gives the app its **own tailnet name** — `https://rallly.shark-kitefin.ts.net`,
+real certificate, no open port. Handled by `../frontdoors.nix`.
+
+A label, never a port, for the same reason as `public`. Lowercase letters,
+digits and interior hyphens only: it becomes a MagicDNS name, a systemd unit
+name *and* a state directory, and anything else breaks at least one of those at
+runtime.
+
+**It costs a whole tailscaled process.** `tailscale serve` publishes on the
+serving node's own MagicDNS name and ts.net has no CNAMEs, so a distinct name
+means a distinct *node* — there is no aliasing to borrow, and hong-kong's own
+name is reserved for the machine. Each one is a daemon, a state directory, a
+device in the admin console and an auth key to rotate. On a 7.6 GB box that is
+not free. Give a name to things that need one, not to everything.
+
+> **Name collisions are silent.** `--hostname=X` is a *request*. If a node
+> called `X` already exists, this one quietly becomes `X-1` and every URL is
+> wrong with no error logged. This has happened once already — `idp`, on
+> 2026-09-01, `tech-debt.md:292`. Before wiping a state directory, delete the
+> old node in the admin console first.
+
+The two doors are independent: `public` is the internet via Cloudflare,
+`frontdoor` is the tailnet via Tailscale. An app can have either, both, or
+neither.
+
 ## What you do not get yet
 
-**A front door.** `x-fleet.frontdoor` is refused, deliberately. A distinct
-`https://<name>.shark-kitefin.ts.net` means a distinct tsnet *node* — MagicDNS
-has no CNAMEs — which is a second tailscaled, a state directory, an auth key
-and a serve config. `../frontdoor.nix` does it for Immich and
-`../grafana-frontdoor.nix` for Grafana. Neither has been generalised, so for
-now a container that needs to be reachable gets a hand-written front door file
-copied from one of those.
+**Nothing, for exposure.** Both doors exist: `x-fleet.public` for the internet
+and `x-fleet.frontdoor` for the tailnet.
 
-Until then, an app here is reachable from the box itself on its loopback port,
-and nowhere else.
+What is still hand-written is the *other* direction — Immich and Grafana keep
+their own `../frontdoor.nix` and `../grafana-frontdoor.nix`, because their
+targets come from NixOS module options rather than compose files. Rewriting two
+working front doors to remove duplication is a bad trade on a machine nobody
+can walk up to.

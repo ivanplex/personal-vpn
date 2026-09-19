@@ -155,6 +155,14 @@ let
     "ioWeight"
     "requiresMounts"
     "secrets"
+    # A HOSTNAME, never a port. See ./public.nix — the cloudflared target is
+    # DERIVED from the service's own ports: entry, so that "publish the photo
+    # library to the internet" is not a one-line typo away.
+    "public"
+    # A NAME LABEL, never a port, for the same reason. See ./frontdoors.nix —
+    # this app gets its own tsnet node and answers at
+    # https://<label>.shark-kitefin.ts.net on the tailnet.
+    "frontdoor"
   ];
 
   # Known, understood, deliberately NOT implemented. Each carries its own
@@ -208,20 +216,12 @@ let
     network_mode = "`network_mode:` is refused. It is how a container escapes into the host's network namespace, which is where tailscaled lives.";
   };
 
-  refusedFleetKeys = {
-    frontdoor = ''
-      `x-fleet.frontdoor` is not implemented yet.
-
-      A distinct https://<name>.shark-kitefin.ts.net means a distinct tsnet
-      NODE — MagicDNS has no CNAMEs — and that is a second tailscaled, a
-      state directory, an auth key and a serve config. ./frontdoor.nix does
-      it for Immich and ./grafana-frontdoor.nix for Grafana; neither has been
-      generalised, and generalising the thing that publishes a service to the
-      tailnet is not a change to make in passing.
-
-      Until it is, write the front door by hand, copying ./frontdoor.nix.
-    '';
-  };
+  # Known, understood, deliberately NOT implemented — the x-fleet equivalent of
+  # refusedServiceKeys above. Empty since 2026-09-18, when `frontdoor` stopped
+  # being refused and became ./frontdoors.nix. Kept rather than deleted: the
+  # next key someone reaches for and does not find should get an explanation,
+  # not "unknown key".
+  refusedFleetKeys = { };
 
   # ===========================================================================
   # 2. THE CONVERSION (this is the IFD — see the header)
@@ -633,8 +633,76 @@ let
                 otherwise ignored. "no" would describe something this box does
                 not do, and accepting it silently would be a lie.
               '';
+
+        # ---- x-fleet.public and x-fleet.frontdoor --------------------------
+        # Both put this app somewhere other than the box's own loopback, and
+        # both need ONE unambiguous target to point at. Everything here exists
+        # to keep that target DERIVABLE.
+        #
+        # The moment a human types a port, publishing Prometheus becomes a typo
+        # rather than an impossibility. See ./public.nix and ./frontdoors.nix —
+        # neither of them parses a port, because neither of them is given one.
+        exposureKeys =
+          if builtins.isAttrs fleet then
+            lib.filter (k: fleet ? ${k}) [ "public" "frontdoor" ]
+          else
+            [ ];
+
+        exposureErrors =
+          if exposureKeys == [ ] then
+            [ ]
+          else
+            let
+              svcNames = if builtins.isAttrs services then lib.attrNames services else [ ];
+              n = builtins.length svcNames;
+              portCount =
+                if n == 1 then builtins.length (services.${builtins.head svcNames}.ports or [ ]) else 0;
+              named = lib.concatMapStringsSep " and " (k: "`x-fleet.${k}`") exposureKeys;
+            in
+            lib.concatMap (
+              k:
+              lib.optional (
+                !(builtins.isString fleet.${k})
+              ) "${file}: `x-fleet.${k}` must be a string."
+            ) exposureKeys
+
+            # A tsnet node name becomes a MagicDNS label, a systemd unit name
+            # and a state directory. Anything outside [a-z0-9-] breaks at least
+            # one of those, and it breaks it at RUNTIME.
+            ++ lib.optional
+              (
+                builtins.elem "frontdoor" exposureKeys
+                && builtins.isString fleet.frontdoor
+                && builtins.match "[a-z0-9]([a-z0-9-]*[a-z0-9])?" fleet.frontdoor == null
+              )
+              ''
+                ${file}: `x-fleet.frontdoor` is `${fleet.frontdoor}`, which is not a
+                usable name label.
+
+                It becomes a MagicDNS name, a systemd unit name and a state
+                directory under /var/lib. Lowercase letters, digits and interior
+                hyphens only.
+              ''
+
+            ++ lib.optional (n != 1) ''
+              ${file}: ${named} is set, but this file defines ${toString n} service(s).
+
+              x-fleet applies to the WHOLE FILE, so with anything other than
+              exactly one service there is no way to say which one is being
+              exposed — and ambiguity about what is reachable is the dangerous
+              kind of ambiguity. One exposed app per file.
+            ''
+            ++ lib.optional (n == 1 && portCount != 1) ''
+              ${file}, service `${builtins.head svcNames}`: ${named} is set, but the service publishes ${toString portCount} port(s).
+
+              The target is DERIVED from this service's own ports: entry — you
+              never type a port, precisely so that a mistake cannot aim it at
+              Immich (2283), Prometheus (9090) or tsidp. That derivation needs
+              exactly one port to point at.
+            '';
+
       in
-      topErrors ++ fleetErrors ++ serviceErrors;
+      topErrors ++ fleetErrors ++ serviceErrors ++ exposureErrors;
 
   errorsByStem = lib.mapAttrs appErrors rawApps;
 
@@ -685,6 +753,47 @@ let
   ) rawApps;
 
   fleetOf = e: e.doc."x-fleet" or { };
+
+  # "127.0.0.1:8088:8088" -> "8088". The HOST side of the mapping, which is
+  # what anything on this box connects to over loopback. The optional "/tcp"
+  # suffix hangs off the container side, so it is stripped first.
+  #
+  # This is the ONLY place a public port is ever derived, and nothing outside
+  # this file computes one. See the options block at the bottom.
+  hostPortOf =
+    p:
+    let
+      parts = lib.splitString ":" (builtins.head (lib.splitString "/" p));
+    in
+    if builtins.length parts >= 3 then builtins.elemAt parts 1 else null;
+
+  # What ./public.nix consumes. Only apps that passed every assertion and are
+  # enabled appear here, so `target` is only ever computed for a service that
+  # was proven to publish exactly one loopback port.
+  appSummary = lib.mapAttrs (
+    _stem: e:
+    let
+      fleet = fleetOf e;
+      # Meaningful when the file defines one service, which is exactly the
+      # case x-fleet.public is asserted into. Otherwise informational.
+      svcName = builtins.head (lib.attrNames e.doc.services);
+      str = k: if builtins.isString (fleet.${k} or null) then fleet.${k} else null;
+      exposed = str "public" != null || str "frontdoor" != null;
+
+      # Derived only when something actually asks to be exposed, and only then
+      # is it proven (by exposureErrors) that there is exactly one service with
+      # exactly one port to derive it from.
+      ports = e.doc.services.${svcName}.ports or [ ];
+      hostPort = if exposed && builtins.length ports == 1 then hostPortOf (builtins.head ports) else null;
+    in
+    {
+      inherit (e) file;
+      service = svcName;
+      public = str "public";
+      frontdoor = str "frontdoor";
+      target = if hostPort == null then null else "http://127.0.0.1:${hostPort}";
+    }
+  ) liveApps;
 
   containersOf =
     e:
@@ -820,7 +929,48 @@ let
 
 in
 {
-  assertions = [
+  # ---------------------------------------------------------------------------
+  # The parsed, validated, ENABLED apps, published for ./public.nix to consume.
+  #
+  # It exists so the IFD above runs ONCE. Two modules each reading ./apps/ would
+  # mean two conversions, and IFD serialises evaluation — the exact cost the
+  # header spends three mitigations avoiding.
+  #
+  # `target` is the whole point of the shape: the loopback URL is computed HERE,
+  # from the service's own ports: entry, and handed over finished. ./public.nix
+  # never parses a port and therefore cannot get one wrong.
+  # ---------------------------------------------------------------------------
+  options.fleet.apps = lib.mkOption {
+    # internal, not readOnly: readOnly counts this option's own `default`
+    # alongside the definition below and throws "set multiple times". Only
+    # ./apps.nix ever sets it, which is the property readOnly would have been
+    # buying.
+    internal = true;
+    type = lib.types.attrsOf (
+      lib.types.submodule {
+        options = {
+          file = lib.mkOption { type = lib.types.str; };
+          service = lib.mkOption { type = lib.types.str; };
+          public = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+          };
+          frontdoor = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+          };
+          target = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+          };
+        };
+      }
+    );
+    default = { };
+    description = "Compose apps deployed on this host, keyed by file stem.";
+  };
+
+  config.assertions = [
     {
       assertion = config.virtualisation.podman.enable;
       message = ''
@@ -837,15 +987,17 @@ in
     message = m;
   }) allErrors;
 
-  virtualisation.oci-containers.containers = mergeAll (
+  config.virtualisation.oci-containers.containers = mergeAll (
     map (stem: containersOf liveApps.${stem}) (lib.attrNames liveApps)
   );
 
-  systemd.services = lib.mapAttrs' (n: v: lib.nameValuePair "podman-${n}" v) (
+  config.systemd.services = lib.mapAttrs' (n: v: lib.nameValuePair "podman-${n}" v) (
     mergeAll (map (stem: unitOverridesOf liveApps.${stem}) (lib.attrNames liveApps))
   );
 
-  sops.secrets = lib.listToAttrs (
+  config.fleet.apps = appSummary;
+
+  config.sops.secrets = lib.listToAttrs (
     map (
       s:
       lib.nameValuePair s {

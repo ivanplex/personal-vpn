@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+#
+# The API token is created at dash.cloudflare.com -> My Profile -> API Tokens
+# -> Create Token -> Custom. Give it exactly two permissions and nothing else:
+#
+#     Account | Cloudflare Tunnel | Edit
+#     Zone    | DNS               | Edit     (scoped to the one zone)
+#
+# NOT a Global API Key: those are account-wide, cannot be scoped, and cannot be
+# revoked without breaking every other thing that uses them.
+
+cloudflare_api_token  = "REPLACE_ME"
+cloudflare_account_id = "REPLACE_ME"
+cloudflare_zone_id    = "REPLACE_ME"
+
+# tunnel_name is DELIBERATELY ABSENT. It must agree with `tunnelName` in
+# hosts/hong-kong/public.nix, and a value here — in a file git cannot see —
+# would be free to drift from it silently. It lives in variables.tf, which is
+# committed, and main.tf refuses to plan if the two disagree.
+#
+# Setting it here also renames the tunnel, and a rename DESTROYS AND RECREATES
+# it: new tunnel ID, and the TunnelID in your sops credentials is then stale.
+
+# openssl rand -base64 32
+# The SAME value goes into the TunnelSecret field of the credentials JSON in
+# secrets/hong-kong.yaml. See ./README.md.
+tunnel_secret = "REPLACE_ME"
