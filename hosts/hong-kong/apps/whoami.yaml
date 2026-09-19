@@ -79,17 +79,14 @@ x-fleet:
   cpuWeight: 10
   ioWeight: 10
 
-  # PUBLISHED TO THE INTERNET at https://whoami.ivanchan.me — the canary for
-  # ../public.nix, exactly as the container itself is the canary for
-  # ../apps.nix.
+  # NOT PUBLISHED. It was, at https://whoami.ivanchan.me, from 2026-09-19
+  # until later the same evening — long enough to prove the tunnel, the
+  # derivation of a hostname from a label, and the catch-all, and then taken
+  # down deliberately.
   #
-  # A LABEL, not a hostname and not a port. `whoami` + the zone in ../public.nix
-  # is what makes the URL; the target is derived from the ports: entry above.
-  # Neither the domain nor the port is sayable here, which is the design.
+  # Taking it down was itself the rehearsal: a public name you have never
+  # revoked is a name you do not know how to revoke. Both halves were needed —
+  # removing this key so the tunnel stops routing it, and `terraform apply` in
+  # ../../cloudflare/ so the name stops resolving.
   #
-  # This app answers with the request it received and holds nothing, which is
-  # why it is the one safe thing to point the public internet at while proving
-  # the mechanism. TAKE IT DOWN once stage 9 is done — remove this key, push,
-  # and `terraform apply`. A door you have never closed is not a door you know
-  # how to close.
-  public: whoami
+  # To publish something again:  public: <label>   (a label, never a hostname)
