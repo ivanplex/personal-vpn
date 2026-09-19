@@ -782,3 +782,42 @@ its job on this machine.
 - **Postgres stays on the internal SSD**, per architecture.md:203. The nightly
   `pg_dump` into `/mnt/storage/immich/backups` is what keeps the array
   self-consistent.
+- **The userspace tailscaled daemons listen on `0.0.0.0`, and that is not
+  fixable.** Found 2026-09-19 while checking what the Cloudflare tunnel had
+  added to the listening surface — it had added nothing, but this turned up:
+
+  ```
+  0.0.0.0:63789   .tailscaled-wra   pid 857
+  0.0.0.0:58567   .tailscaled-wra   pid 855
+  0.0.0.0:57546   tsidp             pid 863
+  ```
+
+  These are peerAPI listeners. In `--tun=userspace-networking` mode the
+  node's Tailscale IP is not a real kernel address, so peerAPI cannot bind to
+  it and falls back to all addresses. The real tailscaled, which has a TUN,
+  does not appear — consistent with that explanation.
+
+  **There is no configuration for it.** tailscaled's entire flag set is
+  `tun, port, state, statedir, socket, config, debug, verbose, cleanup,
+  bird-socket, no-logs-no-support, hardware-attestation`, plus
+  `socks5-server` and `outbound-http-proxy-listen`. Only the last two take an
+  address, and neither is the peerAPI. Checked against
+  `cmd/tailscaled/tailscaled.go`, not inferred.
+
+  **Deliberately not worked around.** The two mechanisms that would confine
+  it — a network namespace, or systemd `IPAddressDeny=192.168.0.0/16` — both
+  apply to *tailscaled*, which is the only way back into this machine. Either
+  one subtly wrong strands the box. The exposure they would remove is already
+  behind two independent layers: `networking.firewall.trustedInterfaces =
+  [ "tailscale0" ]` with no `allowedTCPPorts` (so inbound on `enp0s31f6` is
+  dropped), and NAT with no port forwarding, which is the same fact that made
+  an outbound tunnel the only workable option for public access. Paying a
+  stranding risk on the recovery path to harden something already doubly
+  covered is the wrong trade.
+
+  **What would actually be worth building** is not a fix but a *tripwire*: a
+  check that lists non-loopback, non-tailnet listeners against a known-good
+  allowlist and alerts when the set changes. That converts an invisible drift
+  into a visible one, which is the real risk here — not these three, but the
+  fourth one nobody notices. Same family as the comin liveness rule.
+
