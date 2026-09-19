@@ -675,5 +675,13 @@
     # ../../cloudflare/, which is applied by hand — a machine should not be
     # able to change what the world can reach about itself.
     ./public.nix
+
+    # The catalogue behind the "Apps and exposure" dashboard. It exports what
+    # the machine cannot be asked — whether a service is on the public
+    # internet and at what address, which is a fact about THIS REPOSITORY —
+    # and samples cgroup memory and CPU, which node_exporter's systemd
+    # collector does not provide and which cAdvisor would only cover for
+    # containers. Read-only: it publishes metrics and changes nothing.
+    ./catalogue.nix
   ];
 }

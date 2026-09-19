@@ -11,6 +11,7 @@ and it is deliberate: this repo is the machine.
 | `fleet.json` | `fleet-overview` | Is every host reachable, how hard is it working, how much room is left |
 | `services.json` | `fleet-services` | Which systemd units are running, failed or flapping |
 | `deploys.json` | `fleet-deploys` | Which node is on which commit, and did the last deploy work |
+| `apps.json` | `fleet-apps` | What is running, whether it is public and at what address, and what it costs |
 
 ## Editing one
 
@@ -32,6 +33,14 @@ Every panel references `"uid": "fleet-prometheus"`, which is pinned in
 is the only reason these dashboards keep working across rebuilds.
 
 ## What is deliberately not here
+
+`apps.json` depends on two metrics that exist only because `../catalogue.nix`
+publishes them: `fleet_service_info` (generated from the repo at build time —
+exposure is a property of the configuration, not something the machine knows)
+and `fleet_service_{memory_bytes,cpu_seconds_total}` (read from cgroups,
+because node_exporter's systemd collector has no CPU or memory and cAdvisor
+would see only containers). Delete that import and this dashboard renders
+empty rather than wrong.
 
 No imported community dashboards (the Node Exporter Full board is 200-odd
 panels aimed at a fleet of hundreds, and most of it is noise on a two-core
