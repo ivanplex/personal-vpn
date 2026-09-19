@@ -983,9 +983,26 @@ let
             ExecStart = pkgs.writeShellScript "podman-${svcName}-dirs" ''
               set -uo pipefail
               export PATH=${lib.makeBinPath [ pkgs.coreutils ]}
+
+              # MODE 0755, NOT 0700, AND THAT IS NOT LAXNESS.
+              #
+              # A bind mount is frequently the PARENT of what the container
+              # actually writes. postgres mounts /var/lib/postgresql/data but
+              # puts its cluster in data/pgdata, and its entrypoint chowns
+              # only $PGDATA — so with the parent at 0700 root:root, postgres
+              # (uid 999) cannot TRAVERSE into its own data directory and dies
+              # with EACCES. 0700 here broke public-db while leaving trek
+              # working, because trek's mount IS its data directory and its
+              # `chown -R /app/data` covers the mount point itself.
+              #
+              # 0755 is also what podman's own -v auto-create uses, so this
+              # matches the behaviour it replaces rather than quietly
+              # tightening it. What is inside stays protected by whatever the
+              # application sets — postgres puts 0700 on the cluster itself.
+              #
               # install -d on an existing directory fixes mode and owner and
               # is otherwise a no-op, so this is idempotent across deploys.
-              install -d ${lib.optionalString (owner != null) "-o ${owner}"} -m 0700 \
+              install -d ${lib.optionalString (owner != null) "-o ${owner}"} -m 0755 \
                 ${lib.escapeShellArgs paths}
             '';
           };
