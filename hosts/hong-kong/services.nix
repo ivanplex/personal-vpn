@@ -626,7 +626,7 @@
 #   Three env-file secrets, each a set of KEY=value lines:
 #
 #     public-db-env: |
-#       POSTGRES_PASSWORD=<openssl rand -base64 32>
+#       POSTGRES_PASSWORD=<openssl rand -hex 32>    # HEX, NOT base64 — see below
 #
 #     rallly-env: |
 #       SECRET_PASSWORD=<openssl rand -base64 32>   # 32+ chars, required
@@ -645,6 +645,22 @@
 #   aardvark-dns on the `public` network and nowhere else — which is precisely
 #   the isolation this stage is for. It is in the secret rather than the
 #   compose file because it carries the password.
+#
+#   HEX PASSWORDS, NOT base64. This bit on 2026-09-19. `openssl rand -base64`
+#   emits `+`, `/` and `=`; a `/` inside a postgres:// URL terminates the host
+#   portion, so DATABASE_URL and POSTGRES_PASSWORD can look identical and
+#   still authenticate with different strings. The symptom is
+#   `FATAL: password authentication failed for user "rallly"` in
+#   podman-public-db's log while both secrets appear correct.
+#
+#   AND POSTGRES_PASSWORD IS ONLY READ AT initdb, so fixing the secret is not
+#   enough once the cluster exists:
+#
+#       sudo systemctl stop podman-public-db podman-rallly
+#       sudo rm -rf /var/lib/public-db/pgdata      # no data yet; cheap now
+#       sudo systemctl start podman-public-db && sleep 15
+#       sudo systemctl reset-failed podman-rallly  # clears start-limit-hit
+#       sudo systemctl start podman-rallly
 #
 # -- 10c. The database, on its own ------------------------------------------
 #

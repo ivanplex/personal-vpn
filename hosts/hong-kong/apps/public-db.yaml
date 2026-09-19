@@ -52,6 +52,24 @@ x-fleet:
   network: public
 
   # POSTGRES_PASSWORD=...
+  #
+  # GENERATE IT WITH `openssl rand -hex 32`, NOT -base64.
+  #
+  # base64 emits `+`, `/` and `=`, and the password is embedded in a URL:
+  #
+  #     DATABASE_URL=postgres://rallly:<password>@public-db:5432/rallly
+  #
+  # A `/` there terminates the host portion, so the two secrets can look
+  # identical and still authenticate with different strings. That cost an
+  # evening on 2026-09-19 — the symptom is `FATAL: password authentication
+  # failed` in this unit's log while both secrets appear to match. Hex has no
+  # URL-special characters and removes the class of bug entirely.
+  #
+  # AND NOTE: POSTGRES_PASSWORD IS ONLY READ AT initdb. Changing it later
+  # does nothing to an existing cluster. To actually change it, either
+  # `ALTER USER rallly PASSWORD ...` inside the container, or stop the unit,
+  # `rm -rf /var/lib/public-db/pgdata`, and let it initialise again — which
+  # is cheap while there is no data and destroys everything once there is.
   secrets: [ public-db-env ]
 
   memoryHigh: "192M"
