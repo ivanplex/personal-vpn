@@ -57,12 +57,26 @@ services:
     image: docker.io/mauriceboe/trek@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0
 
     ports:
-      - "127.0.0.1:3002:3001"
+      - "127.0.0.1:3002:3000"
 
     # Carried over from upstream's compose rather than lost in translation.
     read_only: true
     cap_drop:
       - ALL
+    # Dropped ALL, then exactly these three back — which is what upstream's
+    # own compose does, and it is not optional. The image's entrypoint runs
+    # as root and does:
+    #
+    #     chown -R node:node /app/data /app/uploads   <- needs CHOWN
+    #     exec gosu node ...                          <- needs SETUID, SETGID
+    #
+    # Without them it dies on startup. This is the same mistake the whoami
+    # canary made on 2026-09-17 with CAP_NET_BIND_SERVICE: cap_drop: [ALL] is
+    # not a free win, it is a claim about what the image does at startup.
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     security_opt:
       - "no-new-privileges:true"
     tmpfs:
@@ -74,7 +88,7 @@ services:
 
     environment:
       NODE_ENV: "production"
-      PORT: "3001"
+      PORT: "3000"
       TZ: "Asia/Hong_Kong"
       FORCE_HTTPS: "false"      # Cloudflare already terminates and redirects
       ALLOWED_ORIGINS: "https://trek.ivanchan.me"
@@ -95,8 +109,16 @@ x-fleet:
   secrets: [ trek-env ]
 
   # The array must be mounted before this starts, or the uploads directory is
-  # silently recreated on the 238 GB root disk and fills it.
+  # silently recreated on the 238 GB root disk and fills it. This also orders
+  # the directory-preparation unit, so /mnt/storage/trek/uploads is never
+  # created before the array is there to create it on.
   requiresMounts: [ /mnt/storage ]
+
+  # NO volumeOwner. Checked against the image's own config rather than
+  # guessed: it declares no User, so it starts as root, and its entrypoint
+  # chowns /app/data and /app/uploads to node itself before dropping
+  # privileges with gosu. Root-owned empty directories are exactly what it
+  # wants — the same arrangement as postgres in ./public-db.yaml.
 
   memoryHigh: "512M"
   memoryMax: "768M"

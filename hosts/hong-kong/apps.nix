@@ -168,6 +168,16 @@ let
     # EXPOSURE GROUP is expressed: public apps share a network and a database,
     # and cannot see the internal ones. See the network section below.
     "network"
+    # Container names this app must start after — the CROSS-FILE version of
+    # compose's depends_on, which can only name services in its own file.
+    # A shared database lives in its own file precisely so the group can use
+    # it, so the dependency has to be expressible across files.
+    "dependsOn"
+    # uid[:gid] to own this app's bind-mount directories. Omit it and they are
+    # created root-owned, which is right for images that chown their own data
+    # directory (the official postgres entrypoint does) and WRONG for images
+    # that drop privileges first. See the directory section below.
+    "volumeOwner"
   ];
 
   # Known, understood, deliberately NOT implemented. Each carries its own
@@ -849,7 +859,17 @@ let
         ports = svc.ports or [ ];
         volumes = svc.volumes or [ ];
         cmd = map scalarToString (svc.command or [ ]);
-        dependsOn = map scalarToString (svc.depends_on or [ ]);
+        # compose's depends_on (same file) plus x-fleet.dependsOn (any file).
+        # oci-containers resolves both against the GLOBAL container set, which
+        # is why service names are asserted unique across every compose file.
+        #
+        # Ordering only — systemd has no notion of "ready", so a database that
+        # is started but still running initdb will still refuse a connection.
+        # RestartSec above is what actually covers that gap; this just stops
+        # the app trying before the database exists at all.
+        dependsOn =
+          map scalarToString (svc.depends_on or [ ])
+          ++ map scalarToString (fleet.dependsOn or [ ]);
 
         environment = kvPairs (svc.environment or { });
         labels = kvPairs (svc.labels or { });
@@ -901,6 +921,78 @@ let
       }
     ) e.doc.services;
 
+  # ---------------------------------------------------------------------------
+  # BIND-MOUNT DIRECTORIES
+  #
+  # Added 2026-09-19 after rallly and public-db both came up dead on first
+  # deploy. The mechanism asserted that the ARRAY was mounted but never
+  # created the app's OWN directories, so every bind mount pointed at a path
+  # that did not exist. ./immich.nix has done this correctly since the
+  # beginning, with `install -d -o immich -g immich`; apps.nix simply never
+  # carried it over, which made it a gap for every app with a volume rather
+  # than a bug in these two files.
+  #
+  # TWO THINGS THIS HAS TO GET RIGHT.
+  #
+  # OWNERSHIP. An image that starts as root and drops privileges itself — the
+  # official postgres entrypoint does exactly this — is happy with a
+  # root-owned empty directory. An image that starts as an unprivileged user
+  # is not, and fails with EACCES. There is no way to infer which, so
+  # x-fleet.volumeOwner says, and omitting it means root.
+  #
+  # ORDERING. A directory under /mnt/storage MUST NOT be created before the
+  # array is mounted, or it lands on the 238 GB root disk and the array's real
+  # contents are shadowed when it does mount. That is the whole failure
+  # ./immich.nix's header is about, so this unit carries the same
+  # AssertPathIsMountPoint guards as the container it prepares for, and the
+  # container is ordered after it.
+  # ---------------------------------------------------------------------------
+  #
+  # "/var/lib/trek/data:/app/data" -> "/var/lib/trek/data". Only absolute host
+  # paths reach here; named volumes are refused by the volume assertion.
+  hostPathOf = v: builtins.head (lib.splitString ":" v);
+
+  dirUnitsOf =
+    e:
+    let
+      fleet = fleetOf e;
+      mounts = map scalarToString (fleet.requiresMounts or [ ]);
+      owner = fleet.volumeOwner or null;
+    in
+    lib.concatMapAttrs (
+      svcName: svc:
+      let
+        paths = lib.unique (map hostPathOf (lib.filter builtins.isString (svc.volumes or [ ])));
+      in
+      lib.optionalAttrs (paths != [ ]) {
+        "podman-${svcName}-dirs" = {
+          description = "Prepare bind-mount directories for ${svcName}";
+
+          unitConfig = lib.optionalAttrs (mounts != [ ]) {
+            RequiresMountsFor = mounts;
+            # Assert, NOT Condition. A failed Condition marks the job
+            # SUCCESSFUL and the container proceeds — creating its data
+            # directory on the root disk, which is the one outcome this whole
+            # file exists to prevent.
+            AssertPathIsMountPoint = mounts;
+          };
+
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = pkgs.writeShellScript "podman-${svcName}-dirs" ''
+              set -uo pipefail
+              export PATH=${lib.makeBinPath [ pkgs.coreutils ]}
+              # install -d on an existing directory fixes mode and owner and
+              # is otherwise a no-op, so this is idempotent across deploys.
+              install -d ${lib.optionalString (owner != null) "-o ${owner}"} -m 0700 \
+                ${lib.escapeShellArgs paths}
+            '';
+          };
+        };
+      }
+    ) e.doc.services;
+
   # The ladder, from tech-debt.md:632-641 — HIGHER means the kernel reaches for
   # it FIRST. tailscaled is -900, Immich 500, monitoring 800. A third-party app
   # off the internet is the most expendable thing on this machine, so it sits
@@ -914,15 +1006,22 @@ let
       mounts = map scalarToString (fleet.requiresMounts or [ ]);
       mountUnits = map (p: "${utils.escapeSystemdPath p}.mount") mounts;
     in
-    lib.mapAttrs (_svcName: _svc: {
+    lib.mapAttrs (
+      svcName: svc:
+      let
+        hasVolumes = (lib.filter builtins.isString (svc.volumes or [ ])) != [ ];
+      in
+      {
       unitConfig =
         {
-          # Five failures in ten minutes and it stays down. On a machine you
-          # cannot reach, a unit that gives up and leaves evidence in the
-          # journal beats a unit that flails forever — the same reasoning, and
-          # the same numbers, as immich-server in ./immich.nix.
+          # A unit that gives up and leaves evidence beats one that flails
+          # forever — the reasoning immich-server uses in ./immich.nix.
+          #
+          # BUT READ THE RestartSec NOTE BELOW BEFORE CHANGING THESE. Copying
+          # immich's 5-in-10min without also setting RestartSec was a bug: it
+          # made the limit fire in half a second.
           StartLimitIntervalSec = "10min";
-          StartLimitBurst = 5;
+          StartLimitBurst = 10;
         }
         // lib.optionalAttrs (mounts != [ ]) {
           RequiresMountsFor = mounts;
@@ -943,19 +1042,43 @@ let
       # rather than Wants=: a container attached to a network that was never
       # created starts and is unreachable, which is the silent failure this
       # whole file is built to avoid.
-      requires = lib.optional (fleet ? network) "podman-network-${fleet.network}.service";
-      after = mountUnits ++ lib.optional (fleet ? network) "podman-network-${fleet.network}.service";
+      requires =
+        lib.optional (fleet ? network) "podman-network-${fleet.network}.service"
+        ++ lib.optional hasVolumes "podman-${svcName}-dirs.service";
+      after =
+        mountUnits
+        ++ lib.optional (fleet ? network) "podman-network-${fleet.network}.service"
+        ++ lib.optional hasVolumes "podman-${svcName}-dirs.service";
 
       serviceConfig =
         {
           OOMScoreAdjust = fleet.oomScoreAdjust or defaultOomScoreAdjust;
+
+          # THIS LINE IS LOAD-BEARING AND WAS MISSING UNTIL 2026-09-19.
+          #
+          # virtualisation.oci-containers sets Restart="on-failure" and NO
+          # RestartSec (nixos/modules/virtualisation/oci-containers.nix:539),
+          # so systemd's default of 100ms applies. Combined with the
+          # StartLimitBurst above, a container burned every retry in well
+          # under a second and then stayed down FOREVER — which is what
+          # happened to rallly on its first deploy while it waited for
+          # public-db to finish initdb.
+          #
+          # immich.nix's "the module's RestartSec=3" note is about the NixOS
+          # immich module, which does set one. oci-containers does not, and
+          # copying the numbers without the delay inverted their meaning.
+          #
+          # 15s x 10 attempts = about two and a half minutes of trying, which
+          # is enough for a database to come up and still bounded.
+          RestartSec = "15s";
         }
         // lib.optionalAttrs (fleet ? memoryHigh) { MemoryHigh = fleet.memoryHigh; }
         // lib.optionalAttrs (fleet ? memoryMax) { MemoryMax = fleet.memoryMax; }
         // lib.optionalAttrs (fleet ? memorySwapMax) { MemorySwapMax = fleet.memorySwapMax; }
         // lib.optionalAttrs (fleet ? cpuWeight) { CPUWeight = fleet.cpuWeight; }
         // lib.optionalAttrs (fleet ? ioWeight) { IOWeight = fleet.ioWeight; };
-    }) e.doc.services;
+      }
+    ) e.doc.services;
 
   # Every distinct network the live apps ask for. One oneshot each, shared by
   # however many files declare it — which is the point: a network is how an
@@ -1083,7 +1206,8 @@ in
     lib.mapAttrs' (n: v: lib.nameValuePair "podman-${n}" v) (
       mergeAll (map (stem: unitOverridesOf liveApps.${stem}) (lib.attrNames liveApps))
     )
-    // mergeAll (map mkNetworkUnit networksWanted);
+    // mergeAll (map mkNetworkUnit networksWanted)
+    // mergeAll (map (stem: dirUnitsOf liveApps.${stem}) (lib.attrNames liveApps));
 
   config.fleet.apps = appSummary;
 

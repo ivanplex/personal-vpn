@@ -42,6 +42,11 @@ services:
       - "/var/lib/public-db:/var/lib/postgresql/data"
 
 x-fleet:
+  # NO volumeOwner. The official postgres entrypoint starts as root, creates
+  # and chowns PGDATA to the postgres user itself, then re-execs under it — so
+  # a root-owned empty directory is what it wants. Setting an owner here would
+  # be guessing at a uid the image already manages.
+
   # The exposure group. Joining this network is what lets rallly resolve
   # `public-db` by name, and what keeps immich and prometheus out of reach.
   network: public

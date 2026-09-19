@@ -72,6 +72,16 @@ x-fleet:
   public: rallly            # -> https://rallly.ivanchan.me
   network: public           # reaches public-db; cannot reach immich or prometheus
 
+  # Start after the database. NOT compose's depends_on: that can only name
+  # services in this file, and public-db deliberately lives in its own so the
+  # whole group can share it.
+  #
+  # This is ordering, not readiness — systemd cannot know when Postgres starts
+  # accepting connections. The RestartSec in ../apps.nix is what covers the
+  # remaining gap, and its absence is exactly what killed this app on its
+  # first deploy.
+  dependsOn: [ public-db ]
+
   # SECRET_PASSWORD, DATABASE_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET,
   # ALLOWED_EMAILS, SUPPORT_EMAIL
   secrets: [ rallly-env ]
