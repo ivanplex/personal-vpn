@@ -581,7 +581,117 @@
 #   counts failed units as information only. Kill cloudflared and confirm
 #   `fleet-status` still reports healthy and nothing reboots.
 #
-# -- 10. What is deliberately still missing ---------------------------------
+# -- 10. Rallly and TREK, the public exposure group -------------------------
+#
+#   THE RULE THIS STAGE ESTABLISHES: a public-facing app must not share
+#   infrastructure with an internal one. Sharing WITHIN a group is encouraged.
+#   A podman network is how that is expressed, and ./apps.nix now creates one
+#   from `x-fleet.network`.
+#
+#       public network:  rallly ──▶ public-db
+#       host/tailnet:    immich ──▶ postgresql, grafana, tsidp
+#       trek:            on NO network — SQLite, needs nothing, reaches nothing
+#
+#   READ ./apps/trek.yaml's HEADER BEFORE DEPLOYING IT. TREK has no allow-list
+#   of any kind, so with Google as the identity provider it is open to any
+#   Google account. That was raised and accepted on 2026-09-19. Rallly is
+#   different: ALLOWED_EMAILS is its access control and is the one setting in
+#   this stage worth testing rather than assuming.
+#
+#   NEITHER APP CAN USE tsidp. It is tailnet-only, so a stranger's browser
+#   cannot complete the round trip. GitHub cannot be used either — it
+#   publishes no OIDC discovery document for user login. Google for both.
+#
+# -- 10a. Two Google OAuth clients, by hand ---------------------------------
+#
+#   console.cloud.google.com -> APIs & Services -> Credentials ->
+#   Create credentials -> OAuth client ID -> Web application. One per app.
+#
+#       Rallly   https://rallly.ivanchan.me/api/auth/callback/oidc
+#       TREK     https://trek.ivanchan.me/api/auth/oidc/callback
+#
+#   CONFIRM TREK's PATH before creating its client. The URI above came from
+#   TREK's documentation, not from the running container, and a redirect URI
+#   that does not match is a login that fails at the last step — the same
+#   class of bug as the Immich/Grafana redirect URIs in stage 3.
+#
+# -- 10b. Secrets into sops, BEFORE the compose files reach `main` ----------
+#
+#   Same rule as the Grafana keys in 7(a), same reason: a declared secret that
+#   is missing from the file fails sops-install-secrets during ACTIVATION, and
+#   comin neither rolls back nor retries.
+#
+#       sops secrets/hong-kong.yaml
+#
+#   Three env-file secrets, each a set of KEY=value lines:
+#
+#     public-db-env: |
+#       POSTGRES_PASSWORD=<openssl rand -base64 32>
+#
+#     rallly-env: |
+#       SECRET_PASSWORD=<openssl rand -base64 32>   # 32+ chars, required
+#       DATABASE_URL=postgres://rallly:<same password>@public-db:5432/rallly
+#       OIDC_CLIENT_ID=<from Google>
+#       OIDC_CLIENT_SECRET=<from Google>
+#       ALLOWED_EMAILS=you@example.com,*@yourdomain.com
+#       SUPPORT_EMAIL=you@example.com
+#
+#     trek-env: |
+#       ENCRYPTION_KEY=<openssl rand -hex 32>
+#       OIDC_CLIENT_ID=<from Google>
+#       OIDC_CLIENT_SECRET=<from Google>
+#
+#   NOTE `public-db` in DATABASE_URL. That is a CONTAINER NAME, resolved by
+#   aardvark-dns on the `public` network and nowhere else — which is precisely
+#   the isolation this stage is for. It is in the secret rather than the
+#   compose file because it carries the password.
+#
+# -- 10c. The database, on its own ------------------------------------------
+#
+#   Add ./apps/public-db.yaml only. It publishes no port and joins the
+#   network, so the checks are about what CANNOT reach it:
+#
+#       podman network ls                     # `public` exists
+#       podman network inspect public         # public-db, and nothing else
+#       systemctl status podman-public-db podman-network-public
+#       ss -lntp | grep 5432                  # NOTHING. It is not published.
+#
+# -- 10d. TREK ---------------------------------------------------------------
+#
+#   The simpler app: no database, no network, and the one that proves the
+#   storage split. SQLite on the root SSD, uploads on the array.
+#
+#       systemctl status podman-trek
+#       ls -la /var/lib/trek/data /mnt/storage/trek/uploads
+#       curl -sI https://trek.ivanchan.me | head -1     # from MOBILE DATA
+#
+#   Then the isolation, which is the whole reason it is on no network:
+#
+#       podman exec trek sh -c 'wget -qO- 127.0.0.1:2283' ; # must FAIL
+#
+#   And the array guard — unplug it, and TREK must refuse to start rather than
+#   recreate uploads/ on the 238 GB root disk. That is AssertPathIsMountPoint
+#   doing the job ./immich.nix's header explains.
+#
+# -- 10e. Rallly -------------------------------------------------------------
+#
+#   Last, because it is the only one needing the network, the database and an
+#   OIDC round trip at once.
+#
+#       systemctl status podman-rallly
+#       podman exec rallly sh -c 'getent hosts public-db'   # name resolves
+#       curl -sI https://rallly.ivanchan.me | head -1
+#
+#   THEN THE TEST THAT MATTERS. Sign in with a Google account that is NOT in
+#   ALLOWED_EMAILS and confirm it is refused. That one setting is everything
+#   standing between a public Rallly and the internet, and a setting you have
+#   never seen refuse anybody is a hypothesis.
+#
+#   Expect invitations not to send: there is no SMTP, deliberately. Share poll
+#   links by hand. ./apps/rallly.yaml's header says so at length so it is not
+#   rediscovered later as a bug.
+#
+# -- 11. What is deliberately still missing ---------------------------------
 #
 #   Alert DELIVERY. Every rule in ./metrics.nix evaluates, and every one of
 #   them surfaces in a web page nobody is looking at. architecture.md:221 is

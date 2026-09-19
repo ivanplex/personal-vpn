@@ -76,6 +76,7 @@ x-fleet:
   ioWeight: 10
   requiresMounts: []        # paths that must be real mountpoints before this starts
   secrets: []               # sops key names → --env-file /run/secrets/<name>
+  network: null             # a LABEL → join this podman network. See below.
   public: null              # a LABEL → <label>.<zone> on the internet. See below.
   frontdoor: null           # a LABEL → <label>.shark-kitefin.ts.net. See below.
 ```
@@ -127,6 +128,36 @@ in the sops file *before* the compose file that references it reaches `main`.
 A declared secret that is missing from the file fails
 `sops-install-secrets` during **activation**, and comin neither rolls back nor
 retries that generation.
+
+### `network`
+
+```yaml
+x-fleet:
+  network: public
+```
+
+Puts this file's services on a named podman network. Services on the same
+network reach each other **by container name** and are reachable by nothing
+else — not the host, not the internet, not containers on another network.
+
+This is how an **exposure group** is expressed. The rule this fleet follows:
+
+> A public-facing app must not share infrastructure with an internal one.
+> Sharing *within* a group is encouraged.
+
+So `rallly` and `public-db` sit on `public` and share a database, while Immich
+keeps its own Postgres on the host where nothing on that network can reach it.
+A second public app joins with one line and gets the same database.
+
+**Attach only what needs attaching.** `trek` uses SQLite, needs nothing from
+the group, and is therefore on no network at all — which means it can reach
+nothing either. That is a deliberate choice, not an omission.
+
+`apps.nix` generates one `podman-network-<name>.service` per network and
+orders every container on it with `Requires=`, so a container can never start
+before its network exists. The unit deliberately has no `ExecStop`: tearing a
+network down mid-deploy would break running containers, and a network left
+behind costs nothing. Removing one is a deliberate `podman network rm`.
 
 ### `public`
 

@@ -51,13 +51,22 @@
 #     Nothing here calls `docker`, and the alias makes it possible to run a
 #     command believing you are talking to a daemon that does not exist.
 #
-#   * No `defaultNetwork.settings.dns_enabled`. That switches on aardvark-dns,
-#     a second resolver on the box. modules/tailscale-node.nix and
-#     ./frontdoor.nix both spend paragraphs on the fact that DNS on this
-#     machine has exactly one author (2026-08-31, when this box could resolve
-#     *.ts.net and nothing else). A container DNS server is not worth
-#     reopening that. Containers here publish to loopback and talk to the host
-#     by address; they do not need to find each other by name.
+#   * No `defaultNetwork.settings.dns_enabled`. That would put aardvark-dns on
+#     the DEFAULT network, which every container joins unless told otherwise.
+#
+#     AMENDED 2026-09-19, because this note was read as banning aardvark
+#     outright and that is not what it means. The concern is HOST dns: this
+#     machine must have exactly one author for /etc/resolv.conf, which is the
+#     lesson of 2026-08-31 when tailscaled owned it and the box could resolve
+#     *.ts.net and nothing else. aardvark-dns does not touch the host
+#     resolver — it binds a podman bridge address and answers only for
+#     containers on that bridge.
+#
+#     So the rule is narrower than it first appears: no name resolution on the
+#     default network, where it would apply to everything for no reason. On a
+#     USER-DEFINED network it is both unavoidable and wanted — it is how
+#     rallly finds public-db by container name, and ./apps.nix creates those
+#     networks deliberately, one per exposure group. See x-fleet.network.
 #
 #   * No rootless/user containers. Everything runs as root under a system
 #     unit, so there is no lingering user session, no /run/user dependency and

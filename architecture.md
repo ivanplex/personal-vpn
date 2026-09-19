@@ -219,7 +219,23 @@ Two consequences worth stating up front:
 - **A translator must never silently ignore a key.** If it drops `healthcheck:` or `networks:` without saying so, the repository *looks* like the source of truth while the machine runs something else — the worst of both worlds, and invisible in a diff. So `apps.nix` works from an explicit allowlist and fails the build on anything outside it, with a message per refused key explaining what it would have meant.
 - **The cost is import-from-derivation.** Nix has no `builtins.fromYAML`, so evaluation has to build a converter mid-flight. On a box where comin evaluates locally, that means one broken compose file blocks *every* deploy to that host until it is fixed. Branch protection plus gate 1 is what makes it acceptable: the breakage lands in Actions, not on the machine. The mitigations are in the header of `apps.nix`.
 
-> **`oci-containers` attaches to podman networks but does not create them.** An app that genuinely needs two containers on a private network is the point at which this mechanism should be replaced with `quadlet-nix`, which manages networks properly — not the point at which to hand-write a `podman network create` unit and hope. Until then `networks:` is refused outright.
+> **`oci-containers` attaches to podman networks but does not create them.** ~~An app that genuinely needs two containers on a private network is the point at which this mechanism should be replaced with `quadlet-nix`.~~ **Revised 2026-09-19**, when that point arrived: `apps.nix` now creates the network itself, from a dependency-ordered oneshot that every container on it is `Requires=`-ordered after. The original note was ruling out a unit that *races* with container starts, and an ordered oneshot is not that. Replacing a working backend to gain one feature was the larger risk. `quadlet-nix` remains the answer for pods and for declarative network *deletion*, neither of which is needed yet.
+
+### Exposure groups
+
+The rule: **a public-facing app must not share infrastructure with an internal one, and sharing within a group is encouraged.** A podman network is how that is expressed.
+
+```
+  public network                        host / tailnet
+  ┌──────────────────────┐              ┌──────────────────────┐
+  │ rallly ──▶ public-db │              │ immich ──▶ postgresql│
+  └──────────────────────┘              │ grafana, tsidp       │
+  trek — on no network                  └──────────────────────┘
+```
+
+Two Postgres instances that cannot see each other. A compromised public app reaches its own group's database and stops — it cannot reach Immich's, or Prometheus, or the host's loopback services. `x-fleet.network: public` is the whole declaration; `apps.nix` creates the network and orders the containers.
+
+Note that **attaching costs something**, so nothing is attached by default. TREK uses SQLite, needs nothing from the group, and is therefore on no network at all — which means it can reach nothing either. That is the point rather than an omission.
 
 ### Reaching the apps: two doors, deliberately separate
 

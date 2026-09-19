@@ -1,0 +1,82 @@
+# rallly — group scheduling polls, on the public internet.
+#
+#     https://rallly.ivanchan.me
+#
+# ---------------------------------------------------------------------------
+# ALLOWED_EMAILS IS THE ONLY THING BETWEEN THIS AND THE INTERNET
+#
+# Login is Google OIDC and email login is off, so there is no password to
+# guess and no magic link to intercept. But Google will happily authenticate
+# ANY Google account, so without ALLOWED_EMAILS this is a poll tool for the
+# entire world. It is checked on every authentication request, wildcards are
+# supported, and it is the one setting in this file worth testing rather than
+# assuming — sign in with an address outside the list and confirm refusal.
+#
+# ---------------------------------------------------------------------------
+# THIS INSTANCE CANNOT SEND EMAIL, DELIBERATELY
+#
+# No SMTP is configured. That is a decision, not an oversight, and it has a
+# cost worth writing down so it is not rediscovered as a bug:
+#
+#   * Poll INVITATIONS do not send.
+#   * Meeting confirmations and their ICS attachments do not send.
+#   * Share the poll link by hand instead.
+#
+# Login is unaffected — that is what EMAIL_LOGIN_ENABLED=false and OIDC are
+# for. To turn mail on later: add SMTP_HOST and friends to the sops secret and
+# nothing else changes.
+#
+# ---------------------------------------------------------------------------
+# WHY NOT tsidp
+#
+# tsidp is tailnet-only. A stranger's browser cannot reach
+# idp.shark-kitefin.ts.net, so a public app cannot complete an OIDC round trip
+# against it — and exposing the tailnet's identity provider to the internet to
+# fix that would put Immich and Grafana behind the same blast radius. Google
+# is the identity provider here; tsidp stays private. GitHub was considered
+# and cannot be used: it publishes no OIDC discovery document for user login.
+#
+# Register this redirect URI with the Google client:
+#     https://rallly.ivanchan.me/api/auth/callback/oidc
+
+services:
+  rallly:
+    # lukevella/rallly:4 on Docker Hub (NOT ghcr — the self-host docs name
+    # `lukevella/rallly:4`), resolved to a digest on 2026-09-19.
+    image: docker.io/lukevella/rallly@sha256:109ffc74cff2b8b139baa52dca0e0c243fa175aef373be0eca141e4193a91370
+
+    # Loopback only. cloudflared reaches this; nothing else does.
+    ports:
+      - "127.0.0.1:3001:3000"
+
+    environment:
+      NEXT_PUBLIC_BASE_URL: "https://rallly.ivanchan.me"
+
+      # The upstream self-host stack bundles Traefik, Postgres and Garage.
+      # None of that is wanted: Cloudflare is the proxy, public-db is the
+      # database, and there is no object storage.
+      PROXY_MODE: "external"
+
+      # OIDC only. Without this, Rallly offers a six-digit code by email
+      # alongside SSO — and there is no SMTP, so that path would simply fail.
+      EMAIL_LOGIN_ENABLED: "false"
+      OIDC_NAME: "Google"
+      OIDC_DISCOVERY_URL: "https://accounts.google.com/.well-known/openid-configuration"
+
+      # SECRET_PASSWORD, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, DATABASE_URL and
+      # ALLOWED_EMAILS all arrive from sops. DATABASE_URL is a secret because
+      # it carries the password; it points at `public-db` by container name,
+      # which resolves only on the `public` network.
+
+x-fleet:
+  public: rallly            # -> https://rallly.ivanchan.me
+  network: public           # reaches public-db; cannot reach immich or prometheus
+
+  # SECRET_PASSWORD, DATABASE_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET,
+  # ALLOWED_EMAILS, SUPPORT_EMAIL
+  secrets: [ rallly-env ]
+
+  memoryHigh: "384M"
+  memoryMax: "512M"
+  cpuWeight: 20
+  ioWeight: 20

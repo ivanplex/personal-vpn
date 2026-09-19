@@ -1,0 +1,55 @@
+# public-db — Postgres for the PUBLIC exposure group, and nothing else.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS SEPARATELY FROM IMMICH'S POSTGRES
+#
+# The rule: a public-facing application must not share infrastructure with an
+# internal one. Immich's database is reachable only from the host and holds
+# the photo library's metadata; this one is reachable only from the `public`
+# podman network and holds whatever Rallly and its successors put in it. A
+# compromise of a public app reaches this and stops.
+#
+# Sharing is encouraged the OTHER way — within the group. This is deliberately
+# its own file rather than a service inside rallly.yaml, so a second public app
+# joins by adding `network: public` and a connection string, without depending
+# on Rallly's file or duplicating a database.
+#
+# ---------------------------------------------------------------------------
+# NOT PUBLISHED, AND IT MUST STAY THAT WAY
+#
+# No `ports:` entry. Nothing on the host can reach it, and neither can the
+# internet: it is reachable only by containers on the `public` network, by the
+# container name `public-db`. Adding a ports: line here would put a database on
+# a loopback port that cloudflared can see, which is the one thing ../public.nix
+# spends its header explaining how to prevent.
+#
+# DATA LIVES ON THE ROOT SSD, not the array. Same reasoning as ../immich.nix
+# keeping Postgres off the 7 TB disk: a USB enclosure that drops off mid-write
+# corrupts a database far more readily than it corrupts a file.
+
+services:
+  public-db:
+    # postgres:17-alpine, resolved to a digest on 2026-09-19.
+    image: docker.io/library/postgres@sha256:f02121de6f74d30d8a94cd1d9584125e2178d7e6c377d8130112d4e52d867995
+
+    environment:
+      POSTGRES_USER: rallly
+      POSTGRES_DB: rallly
+      # POSTGRES_PASSWORD comes from sops via x-fleet.secrets — never here.
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    volumes:
+      - "/var/lib/public-db:/var/lib/postgresql/data"
+
+x-fleet:
+  # The exposure group. Joining this network is what lets rallly resolve
+  # `public-db` by name, and what keeps immich and prometheus out of reach.
+  network: public
+
+  # POSTGRES_PASSWORD=...
+  secrets: [ public-db-env ]
+
+  memoryHigh: "192M"
+  memoryMax: "256M"
+  cpuWeight: 30
+  ioWeight: 30

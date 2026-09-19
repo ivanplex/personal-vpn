@@ -1,0 +1,104 @@
+# trek — self-hosted travel planner, on the public internet.
+#
+#     https://trek.ivanchan.me
+#
+# ---------------------------------------------------------------------------
+# THIS APP IS OPEN TO ANY GOOGLE ACCOUNT. THAT IS A DECISION.
+#
+# TREK has no allow-list. Its own documentation is explicit: "No
+# group/domain/email allow-lists exist in the configuration layer."
+# OIDC_ONLY=true disables password login and registration, but it does not
+# gate WHO may sign in through OIDC — so with Google as the provider, anyone
+# with a Google account who finds this URL can create an account.
+#
+# This was raised and accepted on 2026-09-19. Rallly is different: it has
+# ALLOWED_EMAILS and uses it.
+#
+# WHAT THAT MEANS FOR EVERYTHING BELOW. With no gate in front, the containment
+# IS the control, and none of it is decoration:
+#
+#   * NOT on the `public` podman network. It uses SQLite and needs nothing
+#     from public-db, so it is attached to nothing and can reach nothing —
+#     not the shared database, not Immich, not Prometheus.
+#   * read_only rootfs, every capability dropped, no-new-privileges.
+#   * 768 M hard cap and OOM rung 900, so a stranger cannot make it the
+#     reason tailscaled dies.
+#
+# THE REMAINING EXPOSURE, STATED: uploads are up to 500 MB and land on the
+# 7 TB array, which also holds the photo library. Open signup therefore means
+# strangers can consume that space. The /mnt/storage alert fires at 90 %,
+# which is ~700 GB of warning — adequate, but it is now a capacity risk driven
+# by other people.
+#
+# ---------------------------------------------------------------------------
+# THE STORAGE SPLIT, COPIED FROM ../immich.nix
+#
+#   SQLite   -> /var/lib/trek/data          the 238 GB root SSD
+#   uploads  -> /mnt/storage/trek/uploads   the 7 TB array
+#
+# A USB enclosure that drops off mid-write corrupts a SQLite database far more
+# readily than it corrupts a video file, which is exactly why Immich's
+# Postgres is not on the array either. x-fleet.requiresMounts is what stops
+# the app starting — and silently recreating its uploads on the root disk —
+# when the array is absent.
+#
+# Register this redirect URI with the Google client. CONFIRM THE PATH against
+# the running container before creating it; it is derived from TREK's docs
+# rather than observed:
+#     https://trek.ivanchan.me/api/auth/oidc/callback
+
+services:
+  trek:
+    # mauriceboe/trek:latest, resolved to a digest on 2026-09-19.
+    #
+    # NOTE the namespace: the repository is github.com/liketrek/TREK but the
+    # image is published under `mauriceboe`. Confirm that is the image that
+    # repo actually builds before trusting a digest of it.
+    image: docker.io/mauriceboe/trek@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0
+
+    ports:
+      - "127.0.0.1:3002:3001"
+
+    # Carried over from upstream's compose rather than lost in translation.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      - "/tmp:noexec,nosuid,size=128m"
+
+    volumes:
+      - "/var/lib/trek/data:/app/data"
+      - "/mnt/storage/trek/uploads:/app/uploads"
+
+    environment:
+      NODE_ENV: "production"
+      PORT: "3001"
+      TZ: "Asia/Hong_Kong"
+      FORCE_HTTPS: "false"      # Cloudflare already terminates and redirects
+      ALLOWED_ORIGINS: "https://trek.ivanchan.me"
+
+      # SSO only: disables password login AND registration.
+      OIDC_ONLY: "true"
+      OIDC_ISSUER: "https://accounts.google.com"
+      OIDC_DISPLAY_NAME: "Google"
+      OIDC_SCOPE: "openid email profile"
+
+      # ENCRYPTION_KEY, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET come from sops.
+
+x-fleet:
+  public: trek              # -> https://trek.ivanchan.me
+  # NO network. See the header: it needs nothing, so it reaches nothing.
+
+  # ENCRYPTION_KEY, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET
+  secrets: [ trek-env ]
+
+  # The array must be mounted before this starts, or the uploads directory is
+  # silently recreated on the 238 GB root disk and fills it.
+  requiresMounts: [ /mnt/storage ]
+
+  memoryHigh: "512M"
+  memoryMax: "768M"
+  cpuWeight: 20
+  ioWeight: 20

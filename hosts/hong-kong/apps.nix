@@ -163,6 +163,11 @@ let
     # this app gets its own tsnet node and answers at
     # https://<label>.shark-kitefin.ts.net on the tailnet.
     "frontdoor"
+    # A podman network this file's services join, so they can reach each other
+    # by container name and nothing else can reach them. This is how an
+    # EXPOSURE GROUP is expressed: public apps share a network and a database,
+    # and cannot see the internal ones. See the network section below.
+    "network"
   ];
 
   # Known, understood, deliberately NOT implemented. Each carries its own
@@ -661,6 +666,39 @@ let
           else
             [ ];
 
+        # Every x-fleet key whose value becomes a NAME somewhere — a DNS label,
+        # a systemd unit, a podman object. They share one rule because the
+        # strictest of them (frontdoor, which is also a state directory) is the
+        # one everything must satisfy anyway.
+        labelKeys =
+          if builtins.isAttrs fleet then
+            lib.filter (k: fleet ? ${k}) [ "public" "frontdoor" "network" ]
+          else
+            [ ];
+
+        labelErrors = lib.concatMap (
+          k:
+          lib.optional
+            (
+              builtins.isString (fleet.${k} or null)
+              && builtins.match "[a-z0-9]([a-z0-9-]*[a-z0-9])?" fleet.${k} == null
+            )
+            ''
+              ${file}: `x-fleet.${k}` is `${toString fleet.${k}}`, which is not a
+              usable name label.
+
+              It is a LABEL, not a hostname and not a URL — the rest of the
+              name is built for you. Lowercase letters, digits and interior
+              hyphens only.
+
+              If you wrote a full hostname like `app.example.com`, write just
+              `app`: the domain comes from one place, and that is the point.
+            ''
+        ) labelKeys
+        ++ lib.optional (
+          (fleet.network or null) != null && !(builtins.isString fleet.network)
+        ) "${file}: `x-fleet.network` must be a string.";
+
         exposureErrors =
           if exposureKeys == [ ] then
             [ ]
@@ -679,31 +717,6 @@ let
               ) "${file}: `x-fleet.${k}` must be a string."
             ) exposureKeys
 
-            # Both labels become DNS names. `frontdoor` additionally becomes a
-            # systemd unit name and a state directory under /var/lib, so it is
-            # the stricter of the two — and rather than keep two rules, both
-            # are held to it. Anything outside this breaks something at
-            # RUNTIME, which is the worst time to find out.
-            ++ lib.concatMap (
-              k:
-              lib.optional
-                (
-                  builtins.isString fleet.${k}
-                  && builtins.match "[a-z0-9]([a-z0-9-]*[a-z0-9])?" fleet.${k} == null
-                )
-                ''
-                  ${file}: `x-fleet.${k}` is `${toString fleet.${k}}`, which is not a
-                  usable name label.
-
-                  It is a LABEL, not a hostname and not a URL — the rest of the
-                  name is built from the zone. Lowercase letters, digits and
-                  interior hyphens only.
-
-                  If you wrote a full hostname like `app.example.com`, write
-                  just `app`: the domain comes from one place, and that is the
-                  point.
-                ''
-            ) exposureKeys
 
             ++ lib.optional (n != 1) ''
               ${file}: ${named} is set, but this file defines ${toString n} service(s).
@@ -723,7 +736,7 @@ let
             '';
 
       in
-      topErrors ++ fleetErrors ++ serviceErrors ++ exposureErrors;
+      topErrors ++ fleetErrors ++ serviceErrors ++ labelErrors ++ exposureErrors;
 
   errorsByStem = lib.mapAttrs appErrors rawApps;
 
@@ -857,6 +870,11 @@ let
 
         environmentFiles = map (n: config.sops.secrets.${n}.path) (fleet.secrets or [ ]);
 
+        # oci-containers can ATTACH to a podman network; it cannot create one.
+        # The missing half is the oneshot generated below, which every
+        # container on a network is ordered after.
+        networks = lib.optional (fleet ? network) fleet.network;
+
         extraOptions =
           lib.optional (svc.read_only or false) "--read-only"
           ++ map (o: "--security-opt=${scalarToString o}") (svc.security_opt or [ ])
@@ -920,7 +938,13 @@ let
       # all. BindsTo= is what covers that. Both are needed. (./immich.nix,
       # layer 3.)
       bindsTo = mountUnits;
-      after = mountUnits;
+
+      # The network must EXIST before a container tries to join it. Requires=
+      # rather than Wants=: a container attached to a network that was never
+      # created starts and is unreachable, which is the silent failure this
+      # whole file is built to avoid.
+      requires = lib.optional (fleet ? network) "podman-network-${fleet.network}.service";
+      after = mountUnits ++ lib.optional (fleet ? network) "podman-network-${fleet.network}.service";
 
       serviceConfig =
         {
@@ -932,6 +956,49 @@ let
         // lib.optionalAttrs (fleet ? cpuWeight) { CPUWeight = fleet.cpuWeight; }
         // lib.optionalAttrs (fleet ? ioWeight) { IOWeight = fleet.ioWeight; };
     }) e.doc.services;
+
+  # Every distinct network the live apps ask for. One oneshot each, shared by
+  # however many files declare it — which is the point: a network is how an
+  # EXPOSURE GROUP is expressed, so it is deliberately not per-app.
+  networksWanted = lib.unique (
+    lib.concatMap (stem: lib.optional ((fleetOf liveApps.${stem}) ? network) (fleetOf liveApps.${stem}).network)
+      (lib.attrNames liveApps)
+  );
+
+  mkNetworkUnit = net: {
+    "podman-network-${net}" = {
+      description = "podman network ${net} (exposure group)";
+
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
+
+      # No `path =`. The script sets PATH explicitly with makeBinPath, which
+      # is operating rule 8 and is the only one of the two that survives
+      # someone reading the script on its own.
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+
+        # Idempotent, and quiet about it. `network exists` is the documented
+        # check and returns non-zero rather than erroring, so this is a
+        # no-op on every deploy after the first.
+        ExecStart = pkgs.writeShellScript "podman-network-${net}" ''
+          set -uo pipefail
+          export PATH=${lib.makeBinPath [ pkgs.coreutils config.virtualisation.podman.package ]}
+          podman network exists ${net} && exit 0
+          exec podman network create ${net}
+        '';
+
+        # Deliberately NO ExecStop removing the network. Stopping this unit
+        # during a deploy would tear the network out from under running
+        # containers; a network left behind costs nothing. Removing one is a
+        # deliberate `podman network rm` — which is the piece quadlet-nix
+        # would manage declaratively, and the reason architecture.md still
+        # points there for anything more than this.
+      };
+    };
+  };
 
   mergeAll = lib.foldl' lib.recursiveUpdate { };
 
@@ -1012,9 +1079,11 @@ in
     map (stem: containersOf liveApps.${stem}) (lib.attrNames liveApps)
   );
 
-  config.systemd.services = lib.mapAttrs' (n: v: lib.nameValuePair "podman-${n}" v) (
-    mergeAll (map (stem: unitOverridesOf liveApps.${stem}) (lib.attrNames liveApps))
-  );
+  config.systemd.services =
+    lib.mapAttrs' (n: v: lib.nameValuePair "podman-${n}" v) (
+      mergeAll (map (stem: unitOverridesOf liveApps.${stem}) (lib.attrNames liveApps))
+    )
+    // mergeAll (map mkNetworkUnit networksWanted);
 
   config.fleet.apps = appSummary;
 
